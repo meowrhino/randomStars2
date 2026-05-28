@@ -159,19 +159,29 @@
       svg.innerHTML = s;
 
       // animate the lines
+      let maxFinish = 0;
       svg.querySelectorAll('.line').forEach((path, i) => {
         const len = path.getTotalLength();
         path.style.strokeDasharray = len;
         path.style.strokeDashoffset = len;
         const dur = 2500 + Math.random() * 2000;
         const delay = 400 + i * 600;
-        path.style.transition = `stroke-dashoffset ${dur}ms cubic-bezier(0.4, 0.0, 0.2, 1) ${delay}ms`;
+        path.style.transition = `stroke-dashoffset ${dur}ms cubic-bezier(0.4, 0.0, 0.2, 1) ${delay}ms, opacity 1500ms ease-in-out`;
+        maxFinish = Math.max(maxFinish, delay + dur);
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             path.style.strokeDashoffset = '0';
           });
         });
       });
+
+      // after all lines finished + a pause, fade them out, then rebuild
+      const totalCycle = maxFinish + 4500; // 4.5s pause to admire
+      clearTimeout(window.__svgLoopTimer);
+      window.__svgLoopTimer = setTimeout(() => {
+        svg.querySelectorAll('.line').forEach(p => { p.style.opacity = '0'; });
+        setTimeout(build, 1700);
+      }, totalCycle);
     }
     build();
 

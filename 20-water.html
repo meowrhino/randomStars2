@@ -35,264 +35,302 @@
 <body>
   <a class="back" href="index.html">← back</a>
   <div class="btn" id="regen">↻ nuevo lago</div>
-  <div class="label">20 · cielo + reflejo en lago · click para crear ondas · ripples deforman las estrellas reflejadas</div>
+  <div class="label">20 · cielo + reflejo en lago (WebGL) · click para crear ondas que deforman las estrellas reflejadas</div>
   <canvas id="c"></canvas>
+
+  <script id="vs" type="x-shader/x-vertex">
+    attribute vec2 aPos; void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+  </script>
+
+  <script id="fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform vec2 uRes;
+    uniform float uTime;
+    uniform vec2 uSeed;
+    uniform vec2 uMoon;    // moon position in clip-uv coords (-1..1)
+    uniform float uMoonR;
+    uniform float uMoonPhase;
+    // ripples: up to 8, packed as (x, y, born, _)
+    uniform vec4 uRipples[8];
+
+    float hash12(vec2 p) { p += uSeed; return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    vec2  hash22(vec2 p) { p += uSeed; p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3))); return fract(sin(p) * 43758.5453); }
+    float vnoise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      float a = hash12(i), b = hash12(i+vec2(1,0));
+      float c = hash12(i+vec2(0,1)), d = hash12(i+vec2(1,1));
+      vec2 u = f*f*(3.0-2.0*f);
+      return mix(mix(a,b,u.x), mix(c,d,u.x), u.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0, a = 0.5;
+      for (int i = 0; i < 4; i++) { v += a * vnoise(p); p *= 2.03; a *= 0.5; }
+      return v;
+    }
+
+    // stars sampled at a uv (3x3 neighbour cells)
+    vec3 stars(vec2 uv) {
+      vec3 acc = vec3(0.0);
+      for (int layer = 0; layer < 3; layer++) {
+        float scale = 70.0 * pow(2.2, float(layer));
+        float density = 0.18 - float(layer) * 0.04;
+        vec2 g = uv * scale;
+        vec2 cell = floor(g);
+        vec2 f = fract(g);
+        for (int dy = -1; dy <= 1; dy++) {
+          for (int dx = -1; dx <= 1; dx++) {
+            vec2 c = cell + vec2(float(dx), float(dy));
+            float pres = hash12(c + float(layer) * 7.7);
+            if (pres > density) continue;
+            vec2 off = hash22(c + 1.11 + float(layer));
+            vec2 d = f - vec2(float(dx), float(dy)) - off;
+            float dist = length(d);
+            if (dist > 1.4) continue;
+            float sz = 0.045 / pow(2.0, float(layer));
+            float u = hash12(c + 77.7 + float(layer));
+            float flux = pow(10.0, -0.4 * (6.5 - pow(u, 4.0) * 6.5 - 5.0));
+            float twPh = hash12(c + 91.1) * 6.2831;
+            float tw = 0.85 + 0.15 * sin(uTime * 1.3 + twPh);
+            float t = hash12(c + 51.2);
+            vec3 col = t < 0.5 ? mix(vec3(1.0, 0.78, 0.55), vec3(1.0), t * 2.0)
+                               : mix(vec3(1.0), vec3(0.7, 0.82, 1.0), (t - 0.5) * 2.0);
+            float core = exp(-dist*dist / (sz*sz*0.55)) * tw * flux;
+            float halo = exp(-dist / (sz * 3.5)) * 0.15 * flux;
+            acc += col * (core * 1.3 + halo);
+          }
+        }
+      }
+      return acc;
+    }
+
+    // render the moon if (uv) hits the moon disk
+    vec3 moon(vec2 uv, vec3 baseCol) {
+      vec2 d = uv - uMoon;
+      float r = length(d);
+      vec3 col = baseCol;
+      // halo
+      float halo = exp(-r * r * 20.0 / (uMoonR * uMoonR)) * 0.5;
+      col += vec3(1.0, 0.95, 0.85) * halo * 0.5;
+      if (r < uMoonR) {
+        // disk
+        vec3 disk = vec3(0.96, 0.93, 0.82);
+        // phase shadow (simple): blend with sky color depending on x offset
+        float termX = uMoonR * cos(uMoonPhase * 6.2831);
+        // for the dark side, blend toward sky color
+        float side = (d.x - termX) * sign(sin(uMoonPhase * 6.2831 + 0.0001));
+        float litMix = smoothstep(-uMoonR * 0.2, uMoonR * 0.2, side);
+        vec3 darkSide = vec3(0.02, 0.025, 0.06);
+        disk = mix(darkSide, disk, litMix);
+        col = disk;
+      }
+      return col;
+    }
+
+    // render the FULL sky color at a given uv (for both top half and reflection)
+    vec3 skyAt(vec2 uv) {
+      // base gradient — darker at top
+      vec3 base = mix(vec3(0.04, 0.05, 0.10), vec3(0.015, 0.02, 0.04), uv.y * 0.5 + 0.5);
+      base += stars(uv);
+      base = moon(uv, base);
+      return base;
+    }
+
+    // ── ripple offset at world position (x,y in pixel coords, HORIZON at y=horizon) ──
+    vec2 rippleOffset(vec2 pix) {
+      vec2 off = vec2(0.0);
+      for (int i = 0; i < 8; i++) {
+        vec4 r = uRipples[i];
+        if (r.z < 0.0) continue;
+        float age = uTime - r.z;
+        if (age < 0.0 || age > 4.5) continue;
+        vec2 d = pix - r.xy;
+        float dist = length(d);
+        float front = age * 140.0;
+        float localR = dist - front;
+        if (abs(localR) > 80.0) continue;
+        float env = exp(-localR * localR * 0.0015) * exp(-front * 0.005) * (1.0 - age / 4.5);
+        vec2 dirN = d / max(dist, 0.001);
+        // ripple displaces perpendicular to wave direction (in source uv space)
+        float ampl = sin(localR * 0.25) * env * 0.020;
+        off += dirN * ampl;
+      }
+      return off;
+    }
+
+    void main() {
+      // uv: -aspect..aspect in x, -1..1 in y. y=0 is screen middle.
+      vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+      vec2 pix = gl_FragCoord.xy;
+      float aspect = uRes.x / uRes.y;
+      float horizonY = uRes.y * 0.5;  // horizon at middle of screen
+
+      vec3 col;
+      if (pix.y > horizonY) {
+        // SKY: use uv as-is
+        col = skyAt(uv);
+      } else {
+        // WATER: sample sky at MIRRORED y
+        // distance below horizon, normalised
+        float belowFrac = (horizonY - pix.y) / horizonY; // 0 at horizon, 1 at bottom
+        // mirror uv: source y is positive (above horizon)
+        vec2 srcUv = vec2(uv.x, -uv.y);
+
+        // base sinusoidal waves (horizontal compression)
+        float wave =
+            sin(pix.y * 0.04 - uTime * 1.5) * 0.003
+          + sin(pix.y * 0.10 + uTime * 0.8) * 0.0018 * (1.0 - belowFrac * 0.3);
+
+        // ripples
+        vec2 rip = rippleOffset(pix);
+
+        // total displacement
+        vec2 displacement = vec2(wave, 0.0) + rip;
+        // ALSO scale ripple vertical effect a bit
+        srcUv += displacement;
+
+        col = skyAt(srcUv);
+
+        // water tint: darker, slightly blue/black, more so with depth
+        vec3 waterTint = vec3(0.01, 0.018, 0.035);
+        float mixK = 0.45 + (1.0 - belowFrac) * 0.15;
+        col = mix(col, waterTint, mixK);
+
+        // glare line at horizon
+        col += vec3(0.05, 0.06, 0.08) * exp(-pow((1.0 - belowFrac) * 0.0, 2.0) * 100.0); // no-op
+      }
+
+      // horizon line glow
+      float horizonDist = abs(pix.y - horizonY);
+      float hGlow = exp(-horizonDist * horizonDist * 0.01) * 0.15;
+      col += vec3(0.03, 0.04, 0.07) * hGlow;
+
+      // subtle grain
+      float grain = (hash12(gl_FragCoord.xy + vec2(uTime * 73.0)) - 0.5) * 0.02;
+      col += grain;
+
+      col = col / (1.0 + col * 0.7);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  </script>
 
   <script>
     const canvas = document.getElementById('c');
-    const ctx = canvas.getContext('2d');
-    let W, H, HORIZON;
+    const gl = canvas.getContext('webgl', { antialias: true });
+    if (!gl) { document.body.innerHTML = '<p style="color:#fff;padding:40px;font-family:monospace">WebGL no disponible</p>'; throw new Error('no webgl'); }
+
+    let DPR = Math.min(window.devicePixelRatio || 1, 2);
     function resize() {
-      W = canvas.width = window.innerWidth;
-      H = canvas.height = window.innerHeight;
-      HORIZON = H * 0.5;
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = window.innerWidth * DPR;
+      canvas.height = window.innerHeight * DPR;
+      gl.viewport(0, 0, canvas.width, canvas.height);
     }
     resize();
+    window.addEventListener('resize', resize);
 
-    // ── pre-render sky to offscreen for fast reflection sampling ──
-    const skyCanvas = document.createElement('canvas');
-    const sctx = skyCanvas.getContext('2d');
-
-    let stars = [];
-    function pickColor() {
-      const r = Math.random();
-      if (r < 0.04) return [180, 200, 255];
-      if (r < 0.18) return [240, 245, 255];
-      if (r < 0.50) return [255, 250, 230];
-      if (r < 0.85) return [255, 225, 190];
-      return [255, 195, 160];
+    function compile(t, s) {
+      const sh = gl.createShader(t);
+      gl.shaderSource(sh, s); gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(sh));
+      return sh;
     }
-    function buildStars() {
-      stars = [];
-      const n = Math.floor(W * (HORIZON) / 600);
-      for (let i = 0; i < n; i++) {
-        const u = Math.random();
-        const mag = 6.5 - Math.pow(u, 4) * 6.5;
-        const flux = Math.pow(10, -0.4 * (mag - 5));
-        stars.push({
-          x: Math.random() * W,
-          y: Math.random() * HORIZON,
-          mag, flux,
-          color: pickColor(),
-          phase: Math.random() * Math.PI * 2,
-          twSpeed: 0.5 + Math.random() * 1.4
-        });
-      }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, document.getElementById('vs').textContent));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+    gl.linkProgram(prog); gl.useProgram(prog);
+
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+    const uRes = gl.getUniformLocation(prog, 'uRes');
+    const uTime = gl.getUniformLocation(prog, 'uTime');
+    const uSeed = gl.getUniformLocation(prog, 'uSeed');
+    const uMoon = gl.getUniformLocation(prog, 'uMoon');
+    const uMoonR = gl.getUniformLocation(prog, 'uMoonR');
+    const uMoonPhase = gl.getUniformLocation(prog, 'uMoonPhase');
+    const uRipples = gl.getUniformLocation(prog, 'uRipples');
+
+    let seedX = Math.random() * 10000, seedY = Math.random() * 10000;
+    // moon in uv coords (-aspect..aspect, -1..1)
+    let moonX, moonY, moonR, moonPhase;
+    function randomMoon() {
+      const aspect = window.innerWidth / window.innerHeight;
+      moonX = (Math.random() - 0.5) * aspect * 1.4;
+      moonY = 0.2 + Math.random() * 0.6;
+      moonR = 0.04 + Math.random() * 0.04;
+      moonPhase = Math.random();
     }
-    buildStars();
-
-    // crescent moon parameters (random per regen)
-    let moon = null;
-    function buildMoon() {
-      moon = {
-        x: W * (0.2 + Math.random() * 0.6),
-        y: HORIZON * (0.15 + Math.random() * 0.4),
-        r: 18 + Math.random() * 16,
-        phase: -0.4 + Math.random() * 0.8 // -1..1 (offset of shadow circle)
-      };
-    }
-    buildMoon();
-
-    function renderSky(t) {
-      skyCanvas.width = W;
-      skyCanvas.height = HORIZON;
-
-      // sky gradient
-      const sky = sctx.createLinearGradient(0, 0, 0, HORIZON);
-      sky.addColorStop(0, '#04060f');
-      sky.addColorStop(0.7, '#080a18');
-      sky.addColorStop(1, '#0c0e22');
-      sctx.fillStyle = sky;
-      sctx.fillRect(0, 0, W, HORIZON);
-
-      // moon
-      const m = moon;
-      // halo
-      const halo = sctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.r * 5);
-      halo.addColorStop(0, 'rgba(255, 245, 220, 0.35)');
-      halo.addColorStop(0.4, 'rgba(255, 230, 190, 0.1)');
-      halo.addColorStop(1, 'rgba(255, 230, 190, 0)');
-      sctx.fillStyle = halo;
-      sctx.fillRect(m.x - m.r * 5, m.y - m.r * 5, m.r * 10, m.r * 10);
-      // disk
-      sctx.fillStyle = '#fff5d8';
-      sctx.beginPath(); sctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); sctx.fill();
-      // phase shadow
-      sctx.save();
-      sctx.beginPath(); sctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); sctx.clip();
-      sctx.fillStyle = '#06080f';
-      sctx.beginPath();
-      sctx.arc(m.x + m.phase * m.r * 1.8, m.y, m.r * 1.05, 0, Math.PI * 2);
-      sctx.fill();
-      sctx.restore();
-
-      // stars
-      sctx.globalCompositeOperation = 'lighter';
-      stars.sort((a, b) => a.flux - b.flux);
-      for (const s of stars) {
-        const tw = 0.8 + 0.2 * Math.sin(t * s.twSpeed + s.phase);
-        const f = s.flux * tw;
-        const [r, g, b] = s.color;
-        const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
-        const haloR = coreR * 2 + Math.pow(f, 0.5) * 4;
-
-        if (f > 4) {
-          const len = Math.min(40, 5 + f * 3);
-          const aS = Math.min(0.5, f * 0.04);
-          const gH = sctx.createLinearGradient(s.x - len, s.y, s.x + len, s.y);
-          gH.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
-          gH.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
-          gH.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
-          sctx.fillStyle = gH; sctx.fillRect(s.x - len, s.y - 0.5, len * 2, 1);
-          const gV = sctx.createLinearGradient(s.x, s.y - len, s.x, s.y + len);
-          gV.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
-          gV.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
-          gV.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
-          sctx.fillStyle = gV; sctx.fillRect(s.x - 0.5, s.y - len, 1, len * 2);
-        }
-
-        const halo2 = sctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
-        const ha = Math.min(0.4, f * 0.05);
-        halo2.addColorStop(0, `rgba(${r|0},${g|0},${b|0},${ha})`);
-        halo2.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
-        sctx.fillStyle = halo2;
-        sctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
-
-        sctx.fillStyle = f > 2
-          ? `rgba(255,255,255,${Math.min(1, f * 0.15)})`
-          : `rgba(${r|0},${g|0},${b|0},${Math.min(1, f * 0.7)})`;
-        sctx.beginPath(); sctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); sctx.fill();
-      }
-      sctx.globalCompositeOperation = 'source-over';
-    }
-
-    // ripples (click adds one)
-    const ripples = [];
-    canvas.addEventListener('click', e => {
-      const r = canvas.getBoundingClientRect();
-      const x = e.clientX - r.left, y = e.clientY - r.top;
-      if (y > HORIZON) {
-        ripples.push({ x, y, r0: 0, born: performance.now(), strength: 18 });
-        if (ripples.length > 12) ripples.shift();
-      }
-    });
+    randomMoon();
 
     document.getElementById('regen').addEventListener('click', () => {
-      buildStars();
-      buildMoon();
-      ripples.length = 0;
+      seedX = Math.random() * 10000;
+      seedY = Math.random() * 10000;
+      randomMoon();
     });
 
-    function noise2(x, y) {
-      // cheap pseudo-noise
-      return Math.sin(x * 12.9898 + y * 78.233) * 43758.5453 % 1;
-    }
-
-    function renderWater(t) {
-      const Hwater = H - HORIZON;
-      // grab a downscaled imageData of sky for sampling (for perf, do row-by-row instead)
-      // simpler approach: draw the sky flipped + apply per-row sinusoidal x distortion
-      // sample sky at flipped y with x perturbation
-      const skyImg = sctx.getImageData(0, 0, W, HORIZON);
-      const waterImg = ctx.createImageData(W, Hwater);
-
-      const now = performance.now();
-      // pre-compute ripple state
-      const liveRipples = [];
-      for (const rp of ripples) {
-        const age = (now - rp.born) / 1000;
-        if (age < 4.5) {
-          rp.r0 = age * 120; // expansion speed
-          rp.alpha = Math.max(0, 1 - age / 4.5);
-          liveRipples.push(rp);
-        }
+    // ripples: array of {x, y, born} in pixel coords (CSS pixels)
+    const ripples = []; // max 8
+    canvas.addEventListener('click', e => {
+      const r = canvas.getBoundingClientRect();
+      const x = (e.clientX - r.left) * DPR;
+      // canvas y is flipped: pix.y = canvas.height - cssY*DPR
+      const y = canvas.height - (e.clientY - r.top) * DPR;
+      if (y < canvas.height / 2) {
+        ripples.push({ x, y, born: performance.now() / 1000 });
+        if (ripples.length > 8) ripples.shift();
       }
-      // mutate ripples list in place: keep only live ones
-      ripples.length = 0;
-      ripples.push(...liveRipples);
+    });
 
-      for (let y = 0; y < Hwater; y++) {
-        // depth-aware distortion: more amplitude near horizon (further reflection),
-        // ALSO more horizontal "compression" near horizon
-        const yWater = y;
-        const depthFactor = 1 - y / Hwater; // 1 at horizon, 0 at bottom
-        // base horizontal sinusoidal wave
-        const wave = Math.sin(yWater * 0.3 + t * 1.5) * 1.5 * (1 - depthFactor * 0.5)
-                   + Math.sin(yWater * 0.07 - t * 0.8) * 3 * (1 - depthFactor * 0.5);
-        // vertical reflection: sky pixel at y_sky = HORIZON - 1 - y * compressY
-        const compressY = 1 - depthFactor * 0.0; // (keep linear for now)
-        const ySkyIdx = Math.floor((1 - y / Hwater) * (HORIZON - 1)); // simple inverted mapping
-        // for darker, compressed reflection: pull mainly from upper sky
-        const ySky = Math.min(HORIZON - 1, Math.max(0, ySkyIdx));
-
-        for (let x = 0; x < W; x++) {
-          // ripple contribution at (x, y) — sum from each live ripple
-          let dxR = 0;
-          for (const rp of liveRipples) {
-            const dx0 = x - rp.x;
-            const dy0 = (HORIZON + y) - rp.y;
-            const dist = Math.sqrt(dx0 * dx0 + dy0 * dy0);
-            const front = rp.r0;
-            const localR = dist - front;
-            if (Math.abs(localR) < 60) {
-              const env = Math.exp(-localR * localR * 0.002) * Math.exp(-front * 0.005);
-              dxR += Math.sin(localR * 0.25) * env * rp.strength * rp.alpha;
-            }
-          }
-
-          const xSrc = Math.max(0, Math.min(W - 1, Math.floor(x + wave + dxR)));
-          const ySrcSky = ySky;
-          const srcIdx = (ySrcSky * W + xSrc) * 4;
-          const dstIdx = (y * W + x) * 4;
-          // attenuate by depth (deeper = darker, more water color)
-          const r0 = skyImg.data[srcIdx];
-          const g0 = skyImg.data[srcIdx + 1];
-          const b0 = skyImg.data[srcIdx + 2];
-          // water tint: deep blue base
-          const tintR = 4, tintG = 8, tintB = 18;
-          const mixK = 0.55 + (1 - depthFactor) * 0.25;
-          waterImg.data[dstIdx]     = r0 * (1 - mixK) + tintR * mixK;
-          waterImg.data[dstIdx + 1] = g0 * (1 - mixK) + tintG * mixK;
-          waterImg.data[dstIdx + 2] = b0 * (1 - mixK) + tintB * mixK;
-          waterImg.data[dstIdx + 3] = 255;
-        }
-      }
-      ctx.putImageData(waterImg, 0, HORIZON);
-    }
-
-    let lastSkyT = 0;
+    const t0 = performance.now();
     function frame() {
-      const t = performance.now() / 1000;
-
-      // re-render sky once per ~80ms (twinkle still smooth enough)
-      if (t - lastSkyT > 0.08) {
-        renderSky(t);
-        lastSkyT = t;
+      const t = (performance.now() - t0) / 1000;
+      // prune old ripples
+      while (ripples.length && t - ripples[0].born > 4.5) ripples.shift();
+      // pack into 8 vec4s
+      const packed = new Float32Array(32);
+      for (let i = 0; i < 8; i++) {
+        const r = ripples[i];
+        if (r) {
+          packed[i * 4 + 0] = r.x;
+          packed[i * 4 + 1] = r.y;
+          packed[i * 4 + 2] = r.born - (t0 / 1000); // already absolute; we send "born seconds from start"
+          packed[i * 4 + 3] = 0;
+        } else {
+          packed[i * 4 + 0] = 0;
+          packed[i * 4 + 1] = 0;
+          packed[i * 4 + 2] = -1;
+          packed[i * 4 + 3] = 0;
+        }
+      }
+      // we send raw born-seconds-since-page-start; in shader compute age = uTime - r.z (both in same epoch)
+      // Adjust: send (r.born - pageStart) which is what we passed; uTime is (performance.now()-t0)/1000.
+      // So age = uTime - (r.born - t0/1000) = (perf - t0)/1000 - r.born + t0/1000 = (perf/1000) - r.born
+      // Hmm this is getting messy. Let me simplify: send rippleAge directly.
+      for (let i = 0; i < 8; i++) {
+        const r = ripples[i];
+        if (r) {
+          packed[i * 4 + 2] = t - (r.born - 0); // wait, r.born was performance.now()/1000, and t = (perf - t0)/1000
+          // ageInSeconds = (perf/1000) - r.born
+          // Send r.born offset relative to t0 so we can compute age = t - rel
+          packed[i * 4 + 2] = r.born - (t0 / 1000);
+        }
       }
 
-      // blit sky to main canvas
-      ctx.drawImage(skyCanvas, 0, 0);
-
-      // water
-      renderWater(t);
-
-      // horizon line glow
-      const lineGrad = ctx.createLinearGradient(0, HORIZON - 2, 0, HORIZON + 2);
-      lineGrad.addColorStop(0, 'rgba(0,0,0,0)');
-      lineGrad.addColorStop(0.5, 'rgba(0,0,0,0.6)');
-      lineGrad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = lineGrad;
-      ctx.fillRect(0, HORIZON - 2, W, 4);
-
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+      gl.uniform1f(uTime, t);
+      gl.uniform2f(uSeed, seedX, seedY);
+      gl.uniform2f(uMoon, moonX, moonY);
+      gl.uniform1f(uMoonR, moonR);
+      gl.uniform1f(uMoonPhase, moonPhase);
+      gl.uniform4fv(uRipples, packed);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       requestAnimationFrame(frame);
     }
     frame();
-
-    window.addEventListener('resize', () => {
-      resize();
-      buildStars();
-      buildMoon();
-    });
   </script>
 </body>
 </html>

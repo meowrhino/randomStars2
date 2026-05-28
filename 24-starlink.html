@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>24 · Satélites Starlink</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.55);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 6px; z-index: 10;
+    }
+    .ui label { display: flex; justify-content: space-between; gap: 12px; align-items:center; }
+    .ui input[type=range] { width: 110px; }
+    .ui button {
+      background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.8);
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      padding: 4px 8px; cursor: pointer; font-family: inherit; font-size: 11px;
+    }
+    .ui button:hover { color:#ffe6a8; border-color:#ffe6a8; }
+    .counter {
+      position: fixed; bottom: 16px; right: 16px;
+      color: rgba(255, 230, 168, 0.7);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 4px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">24 · Starlink · trenes de satélites en LEO atraviesan el cielo en línea recta y parpadean</div>
+  <div class="ui">
+    <label>densidad <input type="range" id="density" min="0" max="100" value="40"></label>
+    <label>velocidad <input type="range" id="speed" min="0" max="200" value="100"></label>
+    <button id="train">🚂 train pass</button>
+  </div>
+  <div class="counter" id="counter"></div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+
+    // ── background stars ──
+    let stars = [];
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.50) return [255, 250, 230];
+      if (r < 0.85) return [255, 225, 190];
+      return [255, 195, 160];
+    }
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * H / 600);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          mag, flux,
+          color: pickColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.4 + Math.random() * 1.2
+        });
+      }
+    }
+    buildStars();
+
+    // ── satellites ──
+    // each sat: angle, lateral offset (perp distance from origin),
+    // axial position along the path (advances over time), brightness modulator
+    const sats = [];
+    let totalCount = 0;
+
+    function spawnSat(opts = {}) {
+      const ang = opts.ang ?? Math.random() * Math.PI * 2;
+      // perpendicular offset (distance from screen centre to satellite's track)
+      const D = Math.max(W, H);
+      const perp = opts.perp ?? (Math.random() - 0.5) * D * 1.2;
+      // axial start: enough off-screen so it enters then exits the view
+      const axialStart = -D * 0.7;
+      const axialEnd = D * 0.7;
+      const speed = (50 + Math.random() * 90) * (parseFloat(document.getElementById('speed').value) / 100); // px/sec
+      const brightness = opts.brightness ?? (Math.random() < 0.25 ? 1.4 + Math.random() * 0.8 : 0.35 + Math.random() * 0.5);
+      const blinkRate = 0.4 + Math.random() * 1.8;
+      const blinkPhase = Math.random() * Math.PI * 2;
+      // color: usually whitish, slightly bluish (sunlit metal)
+      const tCol = Math.random();
+      const color = tCol < 0.15 ? [200, 220, 255]
+                  : tCol < 0.85 ? [245, 245, 255]
+                  : [255, 230, 200];
+      // train flag: dim "tail" effect
+      const trainId = opts.trainId;
+      sats.push({
+        ang, perp, axial: axialStart, axialEnd,
+        speed, brightness, blinkRate, blinkPhase, color,
+        trainId,
+        born: performance.now()
+      });
+      totalCount++;
+    }
+
+    // train pass: 6-10 sats following each other in a line
+    function spawnTrain() {
+      const ang = Math.random() * Math.PI * 2;
+      const perp = (Math.random() - 0.5) * Math.max(W, H) * 0.8;
+      const count = 6 + Math.floor(Math.random() * 5);
+      const trainId = Math.random();
+      for (let i = 0; i < count; i++) {
+        setTimeout(() => spawnSat({
+          ang, perp,
+          brightness: 0.8 + Math.random() * 0.4,
+          trainId
+        }), i * 350);
+      }
+    }
+    document.getElementById('train').addEventListener('click', spawnTrain);
+
+    // ── render ──
+    let lastSpawn = 0;
+    let prevT = performance.now();
+
+    function frame() {
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - prevT) / 1000);
+      prevT = now;
+      const t = now / 1000;
+
+      // background sky — slowly darken (very subtle gradient)
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, '#020307');
+      bg.addColorStop(1, '#040510');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      // ── stars ──
+      ctx.globalCompositeOperation = 'lighter';
+      stars.sort((a, b) => a.flux - b.flux);
+      for (const s of stars) {
+        const tw = 0.8 + 0.2 * Math.sin(t * s.twSpeed + s.phase);
+        const f = s.flux * tw;
+        const [r, g, b] = s.color;
+        const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
+        const haloR = coreR * 2 + Math.pow(f, 0.5) * 4;
+
+        if (f > 3) {
+          const len = Math.min(40, 5 + f * 3);
+          const aS = Math.min(0.45, f * 0.04);
+          const gH = ctx.createLinearGradient(s.x - len, s.y, s.x + len, s.y);
+          gH.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gH.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gH.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          ctx.fillStyle = gH; ctx.fillRect(s.x - len, s.y - 0.5, len * 2, 1);
+          const gV = ctx.createLinearGradient(s.x, s.y - len, s.x, s.y + len);
+          gV.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gV.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gV.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          ctx.fillStyle = gV; ctx.fillRect(s.x - 0.5, s.y - len, 1, len * 2);
+        }
+        const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+        halo.addColorStop(0, `rgba(${r|0},${g|0},${b|0},${Math.min(0.35, f * 0.04)})`);
+        halo.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+        ctx.fillStyle = halo;
+        ctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+        ctx.fillStyle = f > 2
+          ? `rgba(255,255,255,${Math.min(1, f * 0.15)})`
+          : `rgba(${r|0},${g|0},${b|0},${Math.min(1, f * 0.7)})`;
+        ctx.beginPath(); ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // ── spawn rate ──
+      const density = parseFloat(document.getElementById('density').value);
+      if (density > 0 && now - lastSpawn > 30000 / (density + 1)) {
+        spawnSat();
+        lastSpawn = now;
+      }
+
+      // ── satellites ──
+      const alive = [];
+      const cx = W / 2, cy = H / 2;
+      for (const sat of sats) {
+        sat.axial += sat.speed * dt;
+        if (sat.axial > sat.axialEnd) continue;
+        // current world position
+        const cosA = Math.cos(sat.ang), sinA = Math.sin(sat.ang);
+        const x = cx + cosA * sat.axial + (-sinA) * sat.perp;
+        const y = cy + sinA * sat.axial + cosA * sat.perp;
+        // off-screen skip but still alive (until axialEnd)
+        if (x < -50 || x > W + 50 || y < -50 || y > H + 50) { alive.push(sat); continue; }
+
+        // brightness modulation (satellite tumbling → slow blink)
+        const blink = 0.45 + 0.55 * Math.abs(Math.sin(t * sat.blinkRate + sat.blinkPhase));
+        const br = sat.brightness * blink;
+
+        // satellite trail (motion blur): a short line from previous head
+        const trailLen = 12 + br * 8;
+        const px = x - cosA * trailLen;
+        const py = y - sinA * trailLen;
+        const [cr, cg, cb] = sat.color;
+        const grad = ctx.createLinearGradient(px, py, x, y);
+        grad.addColorStop(0, `rgba(${cr},${cg},${cb},0)`);
+        grad.addColorStop(0.9, `rgba(${cr},${cg},${cb},${Math.min(0.95, br * 0.7)})`);
+        grad.addColorStop(1, `rgba(255,255,255,${Math.min(1, br * 0.9)})`);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 1.2 + br * 0.6;
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(x, y); ctx.stroke();
+
+        // head dot + glow
+        const headR = 1.4 + br * 1.2;
+        const glow = ctx.createRadialGradient(x, y, 0, x, y, headR * 6);
+        glow.addColorStop(0, `rgba(${cr},${cg},${cb},${Math.min(0.9, br * 0.4)})`);
+        glow.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+        ctx.fillStyle = glow;
+        ctx.fillRect(x - headR * 6, y - headR * 6, headR * 12, headR * 12);
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(x, y, headR * 0.6, 0, Math.PI * 2); ctx.fill();
+
+        alive.push(sat);
+      }
+      sats.length = 0;
+      sats.push(...alive);
+      ctx.globalCompositeOperation = 'source-over';
+
+      document.getElementById('counter').textContent = `total: ${totalCount} · activos: ${sats.length}`;
+      requestAnimationFrame(frame);
+    }
+    frame();
+
+    window.addEventListener('resize', () => { resize(); buildStars(); });
+  </script>
+</body>
+</html>

@@ -217,7 +217,7 @@
         const hue = dso.hueA + (dso.hueB - dso.hueA) * (rr / maxR);
         const a = (1 - rr / maxR) * 0.4 + 0.05;
         ctx.fillStyle = `hsla(${hue}, 70%, 75%, ${a})`;
-        const sz = 0.5 + Math.random() * 0.5;
+        const sz = 0.5 + h(i, 5, seed) * 0.5;
         ctx.beginPath(); ctx.arc(px, py, sz, 0, Math.PI * 2); ctx.fill();
       }
       // a few bright "HII regions" — pinkish blobs in arms

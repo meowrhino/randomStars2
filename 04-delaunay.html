@@ -136,16 +136,37 @@
       }
       const all = [...map.values()].sort((x, y) => x.d - y.d);
 
-      // keep ~25% shortest edges, then filter to avoid super dense degree
-      const cutoff = all[Math.floor(all.length * 0.22)]?.d || 0;
+      // keep ~18% shortest edges, then limit degree
+      const cutoff = all[Math.floor(all.length * 0.18)]?.d || 0;
       const degree = new Array(stars.length).fill(0);
-      edges = [];
+      let candidate = [];
       for (const e of all) {
         if (e.d > cutoff) break;
         if (degree[e.a] >= 3 || degree[e.b] >= 3) continue;
-        edges.push(e);
+        candidate.push(e);
         degree[e.a]++; degree[e.b]++;
       }
+
+      // build connected components via union-find
+      const parent = new Array(stars.length).fill(0).map((_, i) => i);
+      function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+      function union(a, b) { parent[find(a)] = find(b); }
+      for (const e of candidate) union(e.a, e.b);
+      // count size of each component
+      const compSize = new Map();
+      for (let i = 0; i < stars.length; i++) {
+        const r = find(i);
+        compSize.set(r, (compSize.get(r) || 0) + 1);
+      }
+      // keep only edges in components with 4-9 stars (nice constellation sizes)
+      edges = candidate.filter(e => {
+        const s = compSize.get(find(e.a));
+        return s >= 4 && s <= 9;
+      });
+      // mark which stars belong to surviving clusters (for visual emphasis)
+      const inCluster = new Set();
+      for (const e of edges) { inCluster.add(e.a); inCluster.add(e.b); }
+      stars.forEach((s, i) => s.inCluster = inCluster.has(i));
     }
     build();
 
@@ -168,15 +189,16 @@
         ctx.stroke();
       }
 
-      // stars
+      // stars — emphasise those in clusters
       for (const s of stars) {
         const tw = 0.8 + 0.2 * Math.sin(t * 1.1 + s.phase);
-        const a = s.alpha * tw;
+        const a = s.alpha * tw * (s.inCluster ? 1 : 0.55);
+        const radMul = s.inCluster ? 1.15 : 0.85;
         ctx.fillStyle = `rgba(255,255,255,${a})`;
-        ctx.shadowColor = 'rgba(255,255,255,0.7)';
-        ctx.shadowBlur = 6 + s.r * 4;
+        ctx.shadowColor = s.inCluster ? 'rgba(255,235,200,0.7)' : 'rgba(255,255,255,0.4)';
+        ctx.shadowBlur = s.inCluster ? 8 + s.r * 5 : 3 + s.r * 2;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.arc(s.x, s.y, s.r * radMul, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.shadowBlur = 0;

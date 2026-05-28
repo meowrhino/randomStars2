@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>27 · Cometa con cola gemela</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.55);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 6px; z-index: 10;
+    }
+    .ui label { display: flex; justify-content: space-between; gap: 12px; align-items:center; }
+    .ui input[type=range] { width: 110px; }
+    .ui button {
+      background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.8);
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      padding: 4px 8px; cursor: pointer; font-family: inherit; font-size: 11px;
+    }
+    .ui button:hover { color:#a8d4ff; border-color:#a8d4ff; }
+    .info {
+      position: fixed; bottom: 16px; right: 16px;
+      color: rgba(168, 212, 255, 0.7);
+      font-family: ui-monospace, monospace; font-size: 10px;
+      background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 4px;
+      pointer-events: none; line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">27 · cometa con cola iónica recta (azul, anti-solar) + cola de polvo curva (amarilla, orbital)</div>
+  <div class="ui">
+    <label>brillo <input type="range" id="bright" min="20" max="200" value="100"></label>
+    <label>cola <input type="range" id="tailLen" min="50" max="300" value="180"></label>
+    <button id="regen">↻ nueva órbita</button>
+  </div>
+  <div class="info" id="info"></div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+
+    // ── stars ──
+    let stars = [];
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.50) return [255, 250, 230];
+      if (r < 0.85) return [255, 225, 190];
+      return [255, 195, 160];
+    }
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * H / 700);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        stars.push({
+          x: Math.random() * W, y: Math.random() * H,
+          mag, flux, color: pickColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.4 + Math.random() * 1.2
+        });
+      }
+    }
+    buildStars();
+
+    // ── comet orbital state ──
+    // - sun is off-screen toward one direction. ionTail points AWAY from sun (straight)
+    // - dustTail trails the comet along its velocity vector (curved due to lag)
+    // - comet moves along a curved path across the screen
+    let comet;
+    function newComet() {
+      // sun direction (where the sun is) — off-screen
+      const sunAng = Math.random() * Math.PI * 2;
+      // sun position projected far away (used to compute anti-solar direction)
+      const sunDist = Math.max(W, H) * 1.4;
+      const sunX = W / 2 + Math.cos(sunAng) * sunDist;
+      const sunY = H / 2 + Math.sin(sunAng) * sunDist;
+
+      // comet starting position: opposite side from where it'll exit
+      const startAng = sunAng + Math.PI + (Math.random() - 0.5) * 0.6;
+      // start off-screen
+      const startR = Math.max(W, H) * 0.7;
+      const startX = W / 2 + Math.cos(startAng) * startR;
+      const startY = H / 2 + Math.sin(startAng) * startR;
+      // velocity perpendicular-ish to start direction (orbital path)
+      const velAng = startAng + Math.PI / 2 + (Math.random() - 0.5) * 0.8;
+      const speed = 18 + Math.random() * 12; // px/sec
+      // history for dust tail (curved trail)
+      const history = [];
+      // pre-fill history so tail is visible immediately
+      for (let i = 0; i < 80; i++) {
+        const dx = Math.cos(velAng + i * 0.005) * speed * (i / 80);
+        const dy = Math.sin(velAng + i * 0.005) * speed * (i / 80);
+        history.push({ x: startX - dx * 20, y: startY - dy * 20, born: -i * 0.06 });
+      }
+      comet = { sunX, sunY, x: startX, y: startY, vx: Math.cos(velAng) * speed, vy: Math.sin(velAng) * speed, history, born: performance.now() / 1000 };
+    }
+    newComet();
+    document.getElementById('regen').addEventListener('click', newComet);
+
+    let prevT = performance.now();
+    function frame() {
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - prevT) / 1000);
+      prevT = now;
+      const t = now / 1000;
+
+      // bg with slow fade for streak (almost no streak — just clear)
+      ctx.fillStyle = '#020308';
+      ctx.fillRect(0, 0, W, H);
+
+      // ── stars ──
+      ctx.globalCompositeOperation = 'lighter';
+      stars.sort((a, b) => a.flux - b.flux);
+      for (const s of stars) {
+        const tw = 0.85 + 0.15 * Math.sin(t * s.twSpeed + s.phase);
+        const f = s.flux * tw;
+        const [r, g, b] = s.color;
+        const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
+        const haloR = coreR * 2 + Math.pow(f, 0.5) * 4;
+        if (f > 3) {
+          const len = Math.min(40, 5 + f * 3);
+          const aS = Math.min(0.5, f * 0.04);
+          const gH = ctx.createLinearGradient(s.x - len, s.y, s.x + len, s.y);
+          gH.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gH.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gH.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          ctx.fillStyle = gH; ctx.fillRect(s.x - len, s.y - 0.5, len * 2, 1);
+          const gV = ctx.createLinearGradient(s.x, s.y - len, s.x, s.y + len);
+          gV.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gV.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gV.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          ctx.fillStyle = gV; ctx.fillRect(s.x - 0.5, s.y - len, 1, len * 2);
+        }
+        const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+        halo.addColorStop(0, `rgba(${r|0},${g|0},${b|0},${Math.min(0.35, f * 0.04)})`);
+        halo.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+        ctx.fillStyle = halo;
+        ctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+        ctx.fillStyle = f > 2
+          ? `rgba(255,255,255,${Math.min(1, f * 0.15)})`
+          : `rgba(${r|0},${g|0},${b|0},${Math.min(1, f * 0.7)})`;
+        ctx.beginPath(); ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // ── update comet ──
+      // gentle gravitational curve toward sun
+      const ds = Math.hypot(comet.sunX - comet.x, comet.sunY - comet.y);
+      // very small acceleration toward sun for orbital curve
+      const ax = (comet.sunX - comet.x) / ds * 6;
+      const ay = (comet.sunY - comet.y) / ds * 6;
+      comet.vx += ax * dt;
+      comet.vy += ay * dt;
+      comet.x += comet.vx * dt;
+      comet.y += comet.vy * dt;
+      comet.history.push({ x: comet.x, y: comet.y, born: t });
+      // keep only last ~6s of history
+      while (comet.history.length && t - comet.history[0].born > 8) comet.history.shift();
+
+      // respawn if comet has left the screen with no return
+      if (comet.x < -W * 0.5 || comet.x > W * 1.5 || comet.y < -H * 0.5 || comet.y > H * 1.5) {
+        newComet();
+      }
+
+      const brightness = parseFloat(document.getElementById('bright').value) / 100;
+      const tailLen = parseFloat(document.getElementById('tailLen').value);
+
+      // ── ion tail: STRAIGHT, anti-solar direction, BLUE ──
+      // direction from sun → comet, extended
+      const antiX = (comet.x - comet.sunX) / ds;
+      const antiY = (comet.y - comet.sunY) / ds;
+      // ion tail extends outward
+      const ionEndX = comet.x + antiX * tailLen * 1.4;
+      const ionEndY = comet.y + antiY * tailLen * 1.4;
+      // draw as multiple parallel translucent strokes
+      ctx.lineCap = 'round';
+      for (let k = 0; k < 5; k++) {
+        const offsetAng = (k - 2) * 0.012; // very small angular spread
+        const perpAng = Math.atan2(antiY, antiX) + Math.PI / 2;
+        const perpX = Math.cos(perpAng), perpY = Math.sin(perpAng);
+        const sx = comet.x + perpX * (k - 2) * 1.5;
+        const sy = comet.y + perpY * (k - 2) * 1.5;
+        const ex = ionEndX + perpX * (k - 2) * 4;
+        const ey = ionEndY + perpY * (k - 2) * 4;
+        const grad = ctx.createLinearGradient(sx, sy, ex, ey);
+        grad.addColorStop(0, `rgba(180, 220, 255, ${0.85 * brightness})`);
+        grad.addColorStop(0.4, `rgba(140, 200, 255, ${0.35 * brightness})`);
+        grad.addColorStop(1, `rgba(140, 200, 255, 0)`);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 3 - Math.abs(k - 2) * 0.5;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+      }
+
+      // ── dust tail: CURVED, follows orbital trail behind comet, yellowish ──
+      // We take the history and draw it as a fattening curve, displaced from antiSolar
+      if (comet.history.length > 4) {
+        const hist = comet.history;
+        // build a curved path
+        for (let pass = 0; pass < 3; pass++) {
+          const width = (3 - pass) * 4 * brightness;
+          const alpha = (0.35 - pass * 0.08) * brightness;
+          ctx.strokeStyle = `rgba(255, 230, 170, ${alpha})`;
+          ctx.lineWidth = width;
+          ctx.beginPath();
+          for (let i = hist.length - 1; i >= 0; i--) {
+            const p = hist[i];
+            // amount of "drag away from sun" — proportional to age
+            const age = t - p.born;
+            const drag = Math.min(1, age / 6) * tailLen * 0.5;
+            const px = p.x + antiX * drag * (0.4 + age * 0.08);
+            const py = p.y + antiY * drag * (0.4 + age * 0.08);
+            if (i === hist.length - 1) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+      }
+
+      // ── coma + nucleus ──
+      const coR = 18 * brightness;
+      // outer coma haze
+      const coma = ctx.createRadialGradient(comet.x, comet.y, 0, comet.x, comet.y, coR * 4);
+      coma.addColorStop(0, `rgba(220, 235, 255, ${0.7 * brightness})`);
+      coma.addColorStop(0.2, `rgba(200, 220, 255, ${0.35 * brightness})`);
+      coma.addColorStop(0.5, `rgba(180, 210, 255, ${0.12 * brightness})`);
+      coma.addColorStop(1, `rgba(180, 210, 255, 0)`);
+      ctx.fillStyle = coma;
+      ctx.fillRect(comet.x - coR * 4, comet.y - coR * 4, coR * 8, coR * 8);
+
+      // brighter core
+      const core = ctx.createRadialGradient(comet.x, comet.y, 0, comet.x, comet.y, coR * 0.8);
+      core.addColorStop(0, '#ffffff');
+      core.addColorStop(0.3, `rgba(255, 250, 235, ${0.95 * brightness})`);
+      core.addColorStop(1, `rgba(255, 250, 235, 0)`);
+      ctx.fillStyle = core;
+      ctx.fillRect(comet.x - coR, comet.y - coR, coR * 2, coR * 2);
+
+      // tiny nucleus dot
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(comet.x, comet.y, 1.4, 0, Math.PI * 2); ctx.fill();
+
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ── label sun direction ──
+      const sunMarkerAng = Math.atan2(comet.sunY - H / 2, comet.sunX - W / 2);
+      const mLen = 30;
+      const mx = W / 2 + Math.cos(sunMarkerAng) * (Math.min(W, H) * 0.4);
+      const my = H / 2 + Math.sin(sunMarkerAng) * (Math.min(W, H) * 0.4);
+      // edge of screen indicator
+      const sx2 = Math.max(20, Math.min(W - 20, mx));
+      const sy2 = Math.max(20, Math.min(H - 20, my));
+      ctx.fillStyle = 'rgba(255, 230, 120, 0.5)';
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillText('☉ →', sx2 - 8, sy2);
+
+      document.getElementById('info').innerHTML =
+        `cola iónica · azul · anti-solar<br>` +
+        `cola de polvo · amarilla · arrastrada por la órbita`;
+
+      requestAnimationFrame(frame);
+    }
+    frame();
+
+    window.addEventListener('resize', () => { resize(); buildStars(); });
+  </script>
+</body>
+</html>

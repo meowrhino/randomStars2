@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>25 · Cielo desde Marte</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.8);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+      mix-blend-mode: difference;
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+      mix-blend-mode: difference;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.85);
+      background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 6px; z-index: 10;
+    }
+    .ui label { display: flex; flex-direction: column; gap: 3px; }
+    .ui input[type=range] { width: 130px; }
+    .ephem {
+      position: fixed; bottom: 16px; right: 16px;
+      color: rgba(255, 200, 150, 0.7);
+      font-family: ui-monospace, monospace; font-size: 10px;
+      background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 4px;
+      pointer-events: none;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">25 · cielo desde Marte · twilight rosa, Phobos rápido O→E, Deimos lento E→O, sol más pequeño</div>
+  <div class="ui">
+    <label>hora marciana
+      <input type="range" id="hour" min="0" max="2469" value="600">
+      <span id="hLabel" style="color:#ffcd9a;font-size:10px;"></span>
+    </label>
+    <label>polvo atmosférico
+      <input type="range" id="dust" min="0" max="100" value="55">
+    </label>
+  </div>
+  <div class="ephem" id="ephem"></div>
+  <canvas id="c"></canvas>
+
+  <script>
+    /*
+      Mars facts implemented:
+      - Sol = 24h 39m 35s ≈ 88775s. We use 2469 units (each ~36s) per sol.
+      - Atmosphere is dusty CO2 → daytime sky is butterscotch/pink-tan
+      - At twilight, the sky NEAR the sun is BLUE (Mie scattering by dust at small angles)
+        and the rest is reddish — opposite of Earth
+      - Phobos: orbits Mars in 7h 39m (faster than Mars rotates) so rises in the WEST,
+        crosses sky in ~4.5h. Tiny disk (~12 arcmin).
+      - Deimos: orbital period 30h 18m (slower than rotation), rises in E very slowly,
+        takes ~60h to cross sky. Looks like a bright star.
+      - Sun: angular diameter from Mars ~21 arcmin vs Earth's 32 arcmin. About 2/3 size.
+    */
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H, HORIZON;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+      HORIZON = H * 0.72;
+    }
+    resize();
+
+    // ── stars ──
+    let stars = [];
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * HORIZON / 700);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * HORIZON,
+          mag, flux,
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.3 + Math.random() * 1.0
+        });
+      }
+    }
+    buildStars();
+
+    // ── martian terrain silhouette ──
+    let terrain = null;
+    function buildTerrain() {
+      const pts = [];
+      let y = HORIZON + 10;
+      for (let x = -10; x <= W + 10; x += 14) {
+        y += (Math.random() - 0.5) * 12;
+        y = Math.max(HORIZON - 20, Math.min(HORIZON + 60, y));
+        pts.push([x, y]);
+      }
+      // sharper detail
+      const detail = [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        detail.push(pts[i]);
+        const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+        const my = (pts[i][1] + pts[i + 1][1]) / 2 + (Math.random() - 0.5) * 8;
+        detail.push([mx, my]);
+      }
+      detail.push(pts[pts.length - 1]);
+      terrain = detail;
+    }
+    buildTerrain();
+
+    // ── orbital positions ──
+    // hour: 0..2469 ≈ one full sol
+    function sunAngle(h) {
+      // sun moves 360° per sol → 2 * PI per 2469 units
+      // at h=0 (midnight), sun is below horizon at nadir
+      // at h=1234 (noon), sun is at zenith
+      return (h / 2469) * Math.PI * 2 - Math.PI / 2; // -PI/2 = nadir at h=0
+    }
+    function celestialXY(ang) {
+      // ang = altitude angle from below horizon (-PI/2) over zenith (PI/2) and back
+      // We assume east-west motion across screen
+      // x: -1 (west) → 1 (east) as it rises
+      const x = Math.cos(ang) * 1.0;
+      const y = Math.sin(ang) * 1.0;
+      return [x, y];
+    }
+    function objectScreenPos(altAng, screenCx) {
+      // altAng -PI/2 (horizon E)... PI/2 (zenith) ... 3PI/2 (horizon W) ...
+      // Sun rises in East (positive x) and sets in West (negative x)
+      const x = screenCx + Math.cos(altAng) * W * 0.5;
+      const y = HORIZON - Math.sin(altAng) * H * 0.8;
+      return [x, y];
+    }
+
+    function nightFraction(sunAlt) {
+      // sunAlt = sin(angle)
+      if (sunAlt > 0.1) return 0;
+      if (sunAlt < -0.05) return 1;
+      return 1 - (sunAlt + 0.05) / 0.15;
+    }
+
+    // ── sky color from sun altitude + azimuth ──
+    function skyGradientColors(sunAlt, dustLevel, atSunSide) {
+      // when sun is up, sky is butterscotch
+      // when sun sets, near-sun is BLUE (Mie), rest is reddish-pink → red-brown
+      // when sun is well below, sky is dark with weak red tint
+      let topR, topG, topB, botR, botG, botB;
+      if (sunAlt > 0.3) {
+        // daytime
+        topR = 180 + dustLevel * 0.4; topG = 130 + dustLevel * 0.3; topB = 90 + dustLevel * 0.2;
+        botR = 220 + dustLevel * 0.3; botG = 160 + dustLevel * 0.3; botB = 120 + dustLevel * 0.2;
+      } else if (sunAlt > -0.05) {
+        // twilight — pink/red dominant, BLUE near the sun
+        const f = (sunAlt + 0.05) / 0.35;
+        topR = 60 + f * 100; topG = 25 + f * 80; topB = 40 + f * 60;
+        botR = 200 - (1 - f) * 60; botG = 80 + f * 60; botB = 60 + f * 40;
+        if (atSunSide) {
+          // pull toward blue
+          botR *= 0.6; botG *= 0.9; botB = 140 + f * 100;
+        }
+      } else {
+        // night
+        topR = 10; topG = 6; topB = 18;
+        botR = 50 + dustLevel * 0.3; botG = 20; botB = 30;
+      }
+      return [
+        [Math.min(255, topR | 0), Math.min(255, topG | 0), Math.min(255, topB | 0)],
+        [Math.min(255, botR | 0), Math.min(255, botG | 0), Math.min(255, botB | 0)]
+      ];
+    }
+
+    function fmt(h) {
+      const totalSec = (h / 2469) * 88775;
+      const hr = Math.floor(totalSec / 3600);
+      const min = Math.floor((totalSec % 3600) / 60);
+      return `${String(hr).padStart(2,'0')}:${String(min).padStart(2,'0')} MTC`;
+    }
+
+    function frame() {
+      const t = performance.now() / 1000;
+      const hourInput = parseFloat(document.getElementById('hour').value);
+      const dustLevel = parseFloat(document.getElementById('dust').value);
+
+      const sunAng = sunAngle(hourInput);
+      const sunAlt = Math.sin(sunAng); // -1..1
+      const [sx, sy] = objectScreenPos(sunAng, W / 2);
+
+      const night = nightFraction(sunAlt);
+
+      // sky gradient
+      const colsLeft = skyGradientColors(sunAlt, dustLevel, sx < W / 2);
+      const colsRight = skyGradientColors(sunAlt, dustLevel, sx >= W / 2);
+      // build a 2-pass gradient: vertical from average + horizontal sun-side tint
+      const grd = ctx.createLinearGradient(0, 0, 0, HORIZON);
+      const top = colsLeft[0], bot = colsLeft[1];
+      grd.addColorStop(0, `rgb(${top[0]},${top[1]},${top[2]})`);
+      grd.addColorStop(1, `rgb(${bot[0]},${bot[1]},${bot[2]})`);
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, HORIZON + 4);
+
+      // sun-side tint: blue near sun if twilight
+      if (sunAlt < 0.3 && sunAlt > -0.2 && sx > -100 && sx < W + 100) {
+        const tint = ctx.createRadialGradient(sx, HORIZON, 0, sx, HORIZON, W * 0.6);
+        if (sunAlt > 0) {
+          tint.addColorStop(0, `rgba(255, 230, 180, ${0.3 * (1 - night)})`);
+          tint.addColorStop(0.5, `rgba(220, 150, 110, ${0.15 * (1 - night)})`);
+        } else {
+          tint.addColorStop(0, `rgba(100, 150, 220, ${0.25 * (1 - night)})`);
+          tint.addColorStop(0.5, `rgba(80, 90, 150, ${0.12 * (1 - night)})`);
+        }
+        tint.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = tint;
+        ctx.fillRect(0, 0, W, HORIZON + 4);
+      }
+
+      // stars during night (less than Earth, dust filters)
+      if (night > 0.05) {
+        ctx.globalCompositeOperation = 'lighter';
+        const limitMag = 6.5 - dustLevel * 0.04;
+        for (const s of stars) {
+          if (s.mag > limitMag) continue;
+          const tw = 0.85 + 0.15 * Math.sin(t * s.twSpeed + s.phase);
+          const f = s.flux * tw * night * (1 - dustLevel * 0.005);
+          const coreR = 0.3 + Math.pow(f, 0.4) * 0.6;
+          const haloR = coreR * 2 + Math.pow(f, 0.5) * 3;
+          const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+          halo.addColorStop(0, `rgba(255, 240, 220, ${Math.min(0.3, f * 0.04)})`);
+          halo.addColorStop(1, 'rgba(255, 240, 220, 0)');
+          ctx.fillStyle = halo;
+          ctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+          ctx.fillStyle = f > 2 ? `rgba(255,255,255,${Math.min(1, f * 0.15)})` : `rgba(255, 230, 210, ${Math.min(1, f * 0.7)})`;
+          ctx.beginPath(); ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      // Earth (visible from Mars as a bluish "morning/evening star")
+      if (night > 0.3) {
+        // simple: Earth appears near sun (inner planet)
+        const earthAng = sunAng + 0.3 + Math.sin(t * 0.02) * 0.1;
+        if (Math.sin(earthAng) > 0) {
+          const [ex, ey] = objectScreenPos(earthAng, W / 2);
+          if (ex > 0 && ex < W && ey > 0 && ey < HORIZON) {
+            const halo = ctx.createRadialGradient(ex, ey, 0, ex, ey, 8);
+            halo.addColorStop(0, 'rgba(180, 220, 255, 0.7)');
+            halo.addColorStop(1, 'rgba(180, 220, 255, 0)');
+            ctx.fillStyle = halo;
+            ctx.fillRect(ex - 8, ey - 8, 16, 16);
+            ctx.fillStyle = '#cae0ff';
+            ctx.beginPath(); ctx.arc(ex, ey, 1.4, 0, Math.PI * 2); ctx.fill();
+            // tiny moon hint
+            ctx.fillStyle = 'rgba(220, 220, 200, 0.7)';
+            ctx.beginPath(); ctx.arc(ex + 3, ey, 0.6, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+      }
+
+      // Phobos: orbit 3.2× faster than Mars rotation, retrograde apparent motion
+      // (rises W, sets E). Multiple appearances per sol.
+      // Angle advances 3.2 × sunAngle but from west to east
+      const phobosAng = -sunAng * 3.18 + Math.PI; // offset so it shows up
+      const phobosAlt = Math.sin(phobosAng);
+      if (phobosAlt > -0.05) {
+        const [px, py] = objectScreenPos(phobosAng, W / 2);
+        if (px > -20 && px < W + 20) {
+          const r = 2.2;
+          const halo = ctx.createRadialGradient(px, py, 0, px, py, r * 6);
+          halo.addColorStop(0, `rgba(255, 220, 190, ${night > 0.2 ? 0.6 : 0.35})`);
+          halo.addColorStop(1, 'rgba(255, 220, 190, 0)');
+          ctx.fillStyle = halo;
+          ctx.fillRect(px - r * 6, py - r * 6, r * 12, r * 12);
+          ctx.fillStyle = '#f0d8b0';
+          ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+
+      // Deimos: very slow (orbit ~0.815× rotation, so appears to drift slowly E→W like a star)
+      const deimosAng = sunAng * 0.18 + 2.5; // slow proper motion
+      const deimosAlt = Math.sin(deimosAng);
+      if (deimosAlt > -0.05) {
+        const [dx, dy] = objectScreenPos(deimosAng, W / 2);
+        if (dx > -10 && dx < W + 10) {
+          const r = 0.9;
+          const halo = ctx.createRadialGradient(dx, dy, 0, dx, dy, 5);
+          halo.addColorStop(0, `rgba(255, 235, 210, ${night > 0.2 ? 0.5 : 0.25})`);
+          halo.addColorStop(1, 'rgba(255, 235, 210, 0)');
+          ctx.fillStyle = halo;
+          ctx.fillRect(dx - 5, dy - 5, 10, 10);
+          ctx.fillStyle = '#fff';
+          ctx.beginPath(); ctx.arc(dx, dy, r, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+
+      // sun
+      if (sunAlt > -0.1) {
+        // smaller than Earth's
+        const r = 14 + (sunAlt > 0 ? 4 : 0);
+        const tint = sunAlt > 0.1
+          ? 'rgba(255, 230, 180, 0.55)'
+          : 'rgba(180, 200, 240, 0.45)';
+        const halo = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 8);
+        halo.addColorStop(0, tint);
+        halo.addColorStop(1, 'rgba(255, 230, 180, 0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(sx - r * 8, sy - r * 8, r * 16, r * 16);
+        // disk — bluish when low, white when high
+        if (sunAlt > 0.2) {
+          ctx.fillStyle = '#fff8e6';
+        } else {
+          ctx.fillStyle = '#dde4ff';
+        }
+        ctx.beginPath(); ctx.arc(sx, sy, r * 0.6, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // ── martian terrain (foreground) ──
+      // rusty orange tones
+      const groundGrad = ctx.createLinearGradient(0, HORIZON - 10, 0, H);
+      const isDay = sunAlt > 0;
+      if (isDay) {
+        groundGrad.addColorStop(0, `rgb(${130 + dustLevel * 0.3 | 0},${65 + dustLevel * 0.2 | 0},${35 | 0})`);
+        groundGrad.addColorStop(1, `rgb(${65},${30},${15})`);
+      } else {
+        groundGrad.addColorStop(0, `rgb(${30 + night * 5 | 0},${15},${10})`);
+        groundGrad.addColorStop(1, 'rgb(8, 5, 3)');
+      }
+
+      // draw terrain
+      ctx.beginPath();
+      ctx.moveTo(terrain[0][0], H);
+      for (const [x, y] of terrain) ctx.lineTo(x, y);
+      ctx.lineTo(terrain[terrain.length - 1][0], H);
+      ctx.closePath();
+      ctx.fillStyle = groundGrad;
+      ctx.fill();
+
+      // dust layer near horizon (atmospheric haze)
+      if (dustLevel > 0) {
+        const dust = ctx.createLinearGradient(0, HORIZON - 30, 0, HORIZON + 30);
+        const dr = isDay ? 200 : 50;
+        const dg = isDay ? 130 : 25;
+        const db = isDay ? 85 : 20;
+        dust.addColorStop(0, `rgba(${dr},${dg},${db},0)`);
+        dust.addColorStop(0.5, `rgba(${dr},${dg},${db},${dustLevel * 0.005})`);
+        dust.addColorStop(1, `rgba(${dr},${dg},${db},0)`);
+        ctx.fillStyle = dust;
+        ctx.fillRect(0, HORIZON - 30, W, 60);
+      }
+
+      // labels
+      document.getElementById('hLabel').textContent = `sol · ${fmt(hourInput)}`;
+      document.getElementById('ephem').innerHTML =
+        `sol · ${fmt(hourInput)}<br>` +
+        `sun alt: ${(sunAlt * 90).toFixed(1)}°<br>` +
+        `phobos alt: ${(Math.sin(phobosAng) * 90).toFixed(0)}°<br>` +
+        `deimos alt: ${(Math.sin(deimosAng) * 90).toFixed(0)}°<br>` +
+        `dust opacity: τ=${(dustLevel / 100).toFixed(2)}`;
+
+      requestAnimationFrame(frame);
+    }
+    frame();
+
+    // auto-advance time slowly
+    setInterval(() => {
+      const h = document.getElementById('hour');
+      h.value = (parseFloat(h.value) + 8) % 2469;
+    }, 80);
+
+    window.addEventListener('resize', () => {
+      resize();
+      buildStars();
+      buildTerrain();
+    });
+  </script>
+</body>
+</html>

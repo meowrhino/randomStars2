@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>28 · Eclipse total</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.8);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.85);
+      background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.18);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 6px; z-index: 10;
+    }
+    .ui label { display: flex; flex-direction: column; gap: 3px; }
+    .ui input[type=range] { width: 160px; }
+    .ui button {
+      background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.85);
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      padding: 4px 8px; cursor: pointer; font-family: inherit; font-size: 11px;
+    }
+    .ui button:hover { color:#ffe6a8; border-color:#ffe6a8; }
+    .phase {
+      position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%);
+      color: rgba(255, 230, 168, 0.85);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      letter-spacing: 3px;
+      pointer-events: none;
+      text-shadow: 0 0 6px rgba(255, 230, 168, 0.4);
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">28 · eclipse total · corona + Baily's beads + diamond ring · sky oscurece · estrellas y planetas visibles</div>
+  <div class="phase" id="phase"></div>
+  <div class="ui">
+    <label>fase
+      <input type="range" id="phaseSlider" min="0" max="1000" value="500">
+      <span id="phaseLabel" style="color:#ffcd9a;font-size:10px;"></span>
+    </label>
+    <button id="play">▶ play / pausa</button>
+    <button id="regen">↻ nueva corona</button>
+  </div>
+  <canvas id="c"></canvas>
+
+  <script>
+    /*
+      Phase scale 0..1:
+        0.00 - 0.40   partial eclipse (moon biting into sun, increasing)
+        0.40 - 0.49   Baily's beads + diamond ring (2nd contact approaching)
+        0.49 - 0.51   totality starts: corona reveals, sky dark
+        0.50          totality midpoint
+        0.51 - 0.53   diamond ring (3rd contact) exit
+        0.53 - 1.00   partial decreasing
+    */
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H, cx, cy;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+      cx = W / 2; cy = H * 0.4;
+    }
+    resize();
+
+    // ── stars (visible only during totality) ──
+    let stars = [];
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.55) return [255, 250, 230];
+      if (r < 0.88) return [255, 225, 190];
+      return [255, 195, 160];
+    }
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * H / 1500);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        stars.push({
+          x: Math.random() * W, y: Math.random() * H,
+          mag, flux, color: pickColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.4 + Math.random() * 1.2
+        });
+      }
+    }
+    buildStars();
+
+    // ── prominent planets / bright stars near sun (visible during totality) ──
+    // realistic for solar eclipses: Venus + Mercury often visible, Sirius sometimes
+    const planets = [
+      { offX: 200, offY: -80, name: 'Venus', color: [255, 245, 220], r: 1.6 },
+      { offX: -240, offY: 120, name: 'Mercury', color: [255, 215, 180], r: 1.0 },
+      { offX: 380, offY: 60, name: 'Jupiter', color: [255, 230, 200], r: 1.3 }
+    ];
+
+    // ── corona structure: seeded ray pattern ──
+    let coronaSeed = Math.random() * 1000;
+    function rebuildCorona() { coronaSeed = Math.random() * 1000; }
+    document.getElementById('regen').addEventListener('click', rebuildCorona);
+
+    function coronaIntensity(angle, dist, baseR) {
+      // angular streamers — vary with seed
+      // use a few sin waves at different frequencies
+      const a = angle;
+      let s = 0;
+      s += 0.5 + 0.5 * Math.sin(a * 5 + coronaSeed);
+      s += 0.4 + 0.4 * Math.sin(a * 11 + coronaSeed * 1.7);
+      s += 0.25 + 0.25 * Math.sin(a * 23 + coronaSeed * 2.3);
+      s += 0.15 + 0.15 * Math.sin(a * 41 + coronaSeed * 3.1);
+      s /= 4; // 0..1
+      // helmet streamers — broader peaks along ecliptic (horizontal)
+      const helmet = Math.pow(Math.abs(Math.cos(a)), 0.3) * 0.5;
+      s = s * 0.7 + helmet * 0.5;
+      // radial falloff
+      const r = dist / baseR;
+      // K-corona: exp(-r * 0.3), F-corona: weaker but extends much further
+      const Kcorona = Math.exp(-(r - 1) * 0.7);
+      const Fcorona = Math.exp(-(r - 1) * 0.15) * 0.18;
+      return s * (Kcorona + Fcorona);
+    }
+
+    // ── beads positions (random angles around the limb) ──
+    let beads = [];
+    function buildBeads() {
+      beads = [];
+      // ~ 5-9 beads in a section of the limb (where the moon's profile lets sunlight through)
+      const n = 5 + Math.floor(Math.random() * 5);
+      for (let i = 0; i < n; i++) {
+        beads.push({
+          ang: -0.4 + Math.random() * 0.8, // narrow zone (in radians)
+          strength: 0.4 + Math.random() * 0.6
+        });
+      }
+    }
+    buildBeads();
+
+    let playing = true;
+    document.getElementById('play').addEventListener('click', () => { playing = !playing; });
+
+    // ── colors ──
+    function skyColorFor(phase) {
+      // phase 0..1, totality at ~0.5
+      // partial: blue → dim blue → dark blue → near black
+      const t = Math.abs(phase - 0.5) / 0.5; // 0 at totality, 1 at first/last
+      // at totality: very dark (twilight blue)
+      // at first/last partial: normal day blue
+      const dayColor = [120, 170, 220];
+      const totalityColor = [4, 6, 22];
+      return [
+        Math.round(totalityColor[0] + (dayColor[0] - totalityColor[0]) * Math.pow(t, 1.5)),
+        Math.round(totalityColor[1] + (dayColor[1] - totalityColor[1]) * Math.pow(t, 1.5)),
+        Math.round(totalityColor[2] + (dayColor[2] - totalityColor[2]) * Math.pow(t, 1.5))
+      ];
+    }
+
+    const t0 = performance.now();
+    let lastT = t0;
+    function frame() {
+      const now = performance.now();
+      const dt = (now - lastT) / 1000;
+      lastT = now;
+      const t = (now - t0) / 1000;
+
+      const phaseSlider = document.getElementById('phaseSlider');
+      if (playing) {
+        // full cycle in 24s — slow enough to watch
+        const newVal = (parseFloat(phaseSlider.value) + dt * 1000 / 24) % 1000;
+        phaseSlider.value = newVal;
+      }
+      const phase = parseFloat(phaseSlider.value) / 1000; // 0..1
+
+      // ── sky background ──
+      const sky = skyColorFor(phase);
+      const grd = ctx.createLinearGradient(0, 0, 0, H);
+      grd.addColorStop(0, `rgb(${sky[0]},${sky[1]},${sky[2]})`);
+      grd.addColorStop(1, `rgb(${Math.max(0, sky[0]-15)},${Math.max(0, sky[1]-10)},${Math.max(0, sky[2]+5)})`);
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, H);
+
+      // ── how "total" are we? 1 at exact totality, 0 outside ──
+      const totFactor = Math.max(0, 1 - Math.abs(phase - 0.5) / 0.045); // wide ~9% window
+      const partial = 1 - totFactor;
+
+      // ── stars (only visible during totality) ──
+      if (totFactor > 0.05) {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = totFactor;
+        for (const s of stars) {
+          if (s.mag > 4) continue; // only brightest visible
+          const tw = 0.85 + 0.15 * Math.sin(t * s.twSpeed + s.phase);
+          const f = s.flux * tw;
+          const [r, g, b] = s.color;
+          const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
+          const haloR = coreR * 2 + Math.pow(f, 0.5) * 3;
+          const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+          halo.addColorStop(0, `rgba(${r|0},${g|0},${b|0},${Math.min(0.35, f * 0.05)})`);
+          halo.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          ctx.fillStyle = halo;
+          ctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+          ctx.fillStyle = `rgba(255,255,255,${Math.min(1, f * 0.6)})`;
+          ctx.beginPath(); ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); ctx.fill();
+        }
+        // planets — much brighter, visible
+        for (const p of planets) {
+          const px = cx + p.offX;
+          const py = cy + p.offY;
+          const halo = ctx.createRadialGradient(px, py, 0, px, py, 14);
+          halo.addColorStop(0, `rgba(${p.color[0]},${p.color[1]},${p.color[2]},0.8)`);
+          halo.addColorStop(1, `rgba(${p.color[0]},${p.color[1]},${p.color[2]},0)`);
+          ctx.fillStyle = halo;
+          ctx.fillRect(px - 14, py - 14, 28, 28);
+          ctx.fillStyle = `rgb(${p.color[0]},${p.color[1]},${p.color[2]})`;
+          ctx.beginPath(); ctx.arc(px, py, p.r, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      // ── sun & moon geometry ──
+      const sunR = 50;
+      // moon offset: at phase 0 / 1 → moon far to one side, at phase 0.5 → moon perfectly centered
+      // make a smooth sweep
+      const moonOffset = Math.cos(phase * Math.PI) * sunR * 2.3;
+      const moonX = cx + moonOffset;
+      const moonY = cy;
+      const moonR = sunR * 1.03; // slightly bigger than sun (total eclipse possible)
+
+      // is it total? approximate
+      const totalNow = totFactor > 0.5;
+
+      // ── draw the SUN (only the un-occluded part appears) ──
+      // Strategy:
+      //   1. If totality: draw corona behind, then black moon disk on top
+      //   2. Else partial: draw sun, then overlay moon to occlude
+      //   3. Add bright limb at moon edge for Baily's beads / diamond ring
+
+      // sun glow halo (faint, present even during totality as the corona)
+      if (totFactor > 0.2) {
+        // ── corona ──
+        // multi-pass rendering with radial rays
+        const samples = 220;
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < samples; i++) {
+          const ang = (i / samples) * Math.PI * 2;
+          const intensityProfile = []; // we'll plot radial points
+          // sample along the ray
+          for (let rr = sunR; rr < sunR * 5; rr += 4) {
+            const intensity = coronaIntensity(ang, rr, sunR) * totFactor;
+            if (intensity < 0.02) continue;
+            const px = cx + Math.cos(ang) * rr;
+            const py = cy + Math.sin(ang) * rr;
+            const cR = 2;
+            ctx.fillStyle = `rgba(255, 245, 220, ${intensity * 0.18})`;
+            ctx.beginPath(); ctx.arc(px, py, cR, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+        // smooth halo overlay underneath the rays
+        const innerHalo = ctx.createRadialGradient(cx, cy, sunR * 0.9, cx, cy, sunR * 4);
+        innerHalo.addColorStop(0, `rgba(255, 250, 230, ${0.55 * totFactor})`);
+        innerHalo.addColorStop(0.2, `rgba(255, 245, 220, ${0.20 * totFactor})`);
+        innerHalo.addColorStop(0.6, `rgba(255, 240, 210, ${0.05 * totFactor})`);
+        innerHalo.addColorStop(1, 'rgba(255, 240, 210, 0)');
+        ctx.fillStyle = innerHalo;
+        ctx.fillRect(cx - sunR * 4, cy - sunR * 4, sunR * 8, sunR * 8);
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        // sun visible
+        const sunHalo = ctx.createRadialGradient(cx, cy, 0, cx, cy, sunR * 3);
+        sunHalo.addColorStop(0, 'rgba(255, 245, 200, 0.7)');
+        sunHalo.addColorStop(0.3, 'rgba(255, 230, 160, 0.3)');
+        sunHalo.addColorStop(1, 'rgba(255, 230, 160, 0)');
+        ctx.fillStyle = sunHalo;
+        ctx.fillRect(cx - sunR * 3, cy - sunR * 3, sunR * 6, sunR * 6);
+        ctx.fillStyle = '#fff5be';
+        ctx.beginPath(); ctx.arc(cx, cy, sunR, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // ── moon (black disk) ──
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2); ctx.fill();
+
+      // when the moon is overlapping but not totally covering, we need to SUBTRACT moon from sun
+      // because in the partial case we drew the full sun first, the moon disk above already does this
+      // when in totality, the corona was drawn underneath, and the moon disk on top creates the dark center
+
+      // ── Baily's beads / diamond ring ──
+      // appears just before/after totality at the limb edge
+      const beadDist = Math.abs(phase - 0.5);
+      const inBeadZone = beadDist > 0.03 && beadDist < 0.07;
+      const inDiamondZone = beadDist > 0.05 && beadDist < 0.085;
+      if (inBeadZone || inDiamondZone) {
+        // angle from sun center → moon center (the "leading" edge)
+        const limbAng = Math.atan2(moonY - cy, moonX - cx);
+        // beads/diamond appear on the side OPPOSITE the moon's motion direction
+        const beadCenterAng = limbAng + Math.PI;
+        ctx.globalCompositeOperation = 'lighter';
+        for (const b of beads) {
+          const beadAng = beadCenterAng + b.ang;
+          const bx = cx + Math.cos(beadAng) * sunR;
+          const by = cy + Math.sin(beadAng) * sunR;
+          const intensity = b.strength * (inBeadZone ? (1 - beadDist / 0.07) : 0.3);
+          const beadR = 5 + b.strength * 6;
+          const grad = ctx.createRadialGradient(bx, by, 0, bx, by, beadR * 4);
+          grad.addColorStop(0, `rgba(255, 250, 230, ${0.95 * intensity})`);
+          grad.addColorStop(0.3, `rgba(255, 240, 200, ${0.4 * intensity})`);
+          grad.addColorStop(1, 'rgba(255, 240, 200, 0)');
+          ctx.fillStyle = grad;
+          ctx.fillRect(bx - beadR * 4, by - beadR * 4, beadR * 8, beadR * 8);
+          ctx.fillStyle = `rgba(255, 255, 255, ${intensity})`;
+          ctx.beginPath(); ctx.arc(bx, by, 1.5 + b.strength * 1.5, 0, Math.PI * 2); ctx.fill();
+        }
+        // diamond ring: ONE super bright spot
+        if (inDiamondZone) {
+          const dIntensity = 1 - Math.abs(beadDist - 0.067) / 0.018;
+          if (dIntensity > 0) {
+            const dx = cx + Math.cos(beadCenterAng) * sunR;
+            const dy = cy + Math.sin(beadCenterAng) * sunR;
+            const dR = 18 * dIntensity;
+            const dGrad = ctx.createRadialGradient(dx, dy, 0, dx, dy, dR * 6);
+            dGrad.addColorStop(0, '#fff');
+            dGrad.addColorStop(0.2, `rgba(255, 250, 230, ${0.9 * dIntensity})`);
+            dGrad.addColorStop(0.5, `rgba(255, 240, 200, ${0.4 * dIntensity})`);
+            dGrad.addColorStop(1, 'rgba(255, 240, 200, 0)');
+            ctx.fillStyle = dGrad;
+            ctx.fillRect(dx - dR * 6, dy - dR * 6, dR * 12, dR * 12);
+            // diffraction spikes
+            for (let k = 0; k < 4; k++) {
+              const sAng = k * Math.PI / 4;
+              const len = dR * 8 * dIntensity;
+              const gradS = ctx.createLinearGradient(dx - Math.cos(sAng) * len, dy - Math.sin(sAng) * len, dx + Math.cos(sAng) * len, dy + Math.sin(sAng) * len);
+              gradS.addColorStop(0, 'rgba(255,255,255,0)');
+              gradS.addColorStop(0.5, `rgba(255,255,255,${0.6 * dIntensity})`);
+              gradS.addColorStop(1, 'rgba(255,255,255,0)');
+              ctx.save();
+              ctx.translate(dx, dy);
+              ctx.rotate(sAng);
+              const grad2 = ctx.createLinearGradient(-len, 0, len, 0);
+              grad2.addColorStop(0, 'rgba(255,255,255,0)');
+              grad2.addColorStop(0.5, `rgba(255,255,255,${0.6 * dIntensity})`);
+              grad2.addColorStop(1, 'rgba(255,255,255,0)');
+              ctx.fillStyle = grad2;
+              ctx.fillRect(-len, -1, len * 2, 2);
+              ctx.restore();
+            }
+          }
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      // ── chromosphere (thin pink/red ring at limb during 2nd & 3rd contact) ──
+      if (beadDist > 0.005 && beadDist < 0.04) {
+        ctx.globalCompositeOperation = 'lighter';
+        const limbAng = Math.atan2(moonY - cy, moonX - cx);
+        const chromAng = limbAng + Math.PI;
+        // small arc of red glow
+        ctx.strokeStyle = 'rgba(255, 100, 90, 0.5)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, sunR, chromAng - 0.4, chromAng + 0.4);
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      // ── phase label ──
+      let phaseName = 'PARCIAL';
+      if (totFactor > 0.5) phaseName = 'TOTALIDAD';
+      else if (beadDist > 0.05 && beadDist < 0.085) phaseName = phase < 0.5 ? 'DIAMOND RING (2º contacto)' : 'DIAMOND RING (3º contacto)';
+      else if (beadDist > 0.03 && beadDist < 0.07) phaseName = "BAILY'S BEADS";
+      else if (phase < 0.5) phaseName = 'PARCIAL · entrando';
+      else phaseName = 'PARCIAL · saliendo';
+      document.getElementById('phase').textContent = phaseName;
+      document.getElementById('phaseLabel').textContent = `progreso ${(phase * 100).toFixed(1)}%`;
+
+      requestAnimationFrame(frame);
+    }
+    frame();
+
+    window.addEventListener('resize', () => { resize(); buildStars(); });
+  </script>
+</body>
+</html>

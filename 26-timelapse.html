@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>26 · Time-lapse 24h</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.8);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+      mix-blend-mode: difference;
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+      mix-blend-mode: difference;
+    }
+    .clock {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 18px;
+      color: #ffe6a8;
+      background: rgba(0,0,0,0.5); border: 1px solid rgba(255,230,168,0.3);
+      padding: 8px 14px; border-radius: 4px;
+      letter-spacing: 2px;
+      mix-blend-mode: difference;
+      pointer-events: none;
+    }
+    .speed {
+      position: fixed; top: 70px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 4px;
+      z-index: 10;
+    }
+    .speed input[type=range] { width: 140px; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">26 · ciclo de 24h comprimido · sol → atardecer → vía láctea → amanecer · loop</div>
+  <div class="clock" id="clock">00:00</div>
+  <div class="speed">
+    <label>velocidad
+      <input type="range" id="speed" min="1" max="200" value="60">
+    </label>
+  </div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H, HORIZON;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+      HORIZON = H * 0.78;
+    }
+    resize();
+
+    // ── starfield ──
+    let stars = [];
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.50) return [255, 250, 230];
+      if (r < 0.85) return [255, 225, 190];
+      return [255, 195, 160];
+    }
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * HORIZON / 600);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * HORIZON,
+          mag, flux,
+          color: pickColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.4 + Math.random() * 1.2
+        });
+      }
+    }
+    buildStars();
+
+    // ── milky way band procedural (simple) ──
+    // we paint it as a precomputed offscreen canvas
+    const mwCanvas = document.createElement('canvas');
+    const mctx = mwCanvas.getContext('2d');
+    function buildMW() {
+      mwCanvas.width = W;
+      mwCanvas.height = HORIZON;
+      mctx.fillStyle = 'rgba(0,0,0,0)';
+      mctx.clearRect(0, 0, W, HORIZON);
+      // band: angled diagonal, gaussian falloff
+      const cy = HORIZON * 0.55;
+      const ang = -0.35;
+      // simple gaussian blob along the angle
+      const grad = mctx.createRadialGradient(W * 0.6, cy, 30, W * 0.6, cy, W * 0.6);
+      // we just dot it with many translucent stars + a glow band
+      // glow band (offscreen)
+      mctx.save();
+      mctx.translate(W / 2, cy);
+      mctx.rotate(ang);
+      // gradient strip
+      const g2 = mctx.createLinearGradient(0, -HORIZON * 0.18, 0, HORIZON * 0.18);
+      g2.addColorStop(0, 'rgba(0,0,0,0)');
+      g2.addColorStop(0.5, 'rgba(155, 145, 175, 0.32)');
+      g2.addColorStop(1, 'rgba(0,0,0,0)');
+      mctx.fillStyle = g2;
+      mctx.fillRect(-W * 0.7, -HORIZON * 0.18, W * 1.4, HORIZON * 0.36);
+      // brighter core
+      const g3 = mctx.createRadialGradient(-W * 0.15, 0, 0, -W * 0.15, 0, W * 0.25);
+      g3.addColorStop(0, 'rgba(255, 220, 170, 0.4)');
+      g3.addColorStop(0.5, 'rgba(180, 130, 110, 0.2)');
+      g3.addColorStop(1, 'rgba(255,220,170,0)');
+      mctx.fillStyle = g3;
+      mctx.fillRect(-W * 0.4, -W * 0.25, W * 0.5, W * 0.5);
+      mctx.restore();
+      // dust lanes — random dark blobs along band
+      mctx.save();
+      mctx.translate(W / 2, cy);
+      mctx.rotate(ang);
+      mctx.globalCompositeOperation = 'destination-out';
+      for (let i = 0; i < 20; i++) {
+        const x = (Math.random() - 0.5) * W;
+        const y = (Math.random() - 0.5) * HORIZON * 0.25;
+        const r = 18 + Math.random() * 35;
+        const dg = mctx.createRadialGradient(x, y, 0, x, y, r);
+        dg.addColorStop(0, 'rgba(0,0,0,0.65)');
+        dg.addColorStop(1, 'rgba(0,0,0,0)');
+        mctx.fillStyle = dg;
+        mctx.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+      mctx.globalCompositeOperation = 'source-over';
+      mctx.restore();
+    }
+    buildMW();
+
+    // ── mountain silhouette ──
+    let mountains = null;
+    function buildMountains() {
+      mountains = [];
+      for (let layer = 0; layer < 2; layer++) {
+        const pts = [];
+        const baseY = HORIZON + layer * 10;
+        const amp = 40 + layer * 25;
+        let prev = baseY - amp * 0.5;
+        const step = 22 + layer * 8;
+        for (let x = -10; x <= W + 10; x += step) {
+          const target = baseY - amp * (0.3 + Math.random() * 0.7);
+          prev = prev * 0.4 + target * 0.6;
+          pts.push([x, prev]);
+        }
+        const detail = [];
+        for (let i = 0; i < pts.length - 1; i++) {
+          detail.push(pts[i]);
+          const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+          const my = (pts[i][1] + pts[i + 1][1]) / 2 + (Math.random() - 0.5) * 14;
+          detail.push([mx, my]);
+        }
+        detail.push(pts[pts.length - 1]);
+        mountains.push(detail);
+      }
+    }
+    buildMountains();
+
+    // ── color stops for the 24h cycle ──
+    // hour fraction h ∈ [0, 24)
+    // returns [topRGB, midRGB, horizonRGB]
+    const palette = [
+      [0,    [4, 6, 18],   [8, 12, 30],  [20, 14, 36]],     // 00 deep night
+      [4,    [4, 6, 18],   [10, 14, 32], [40, 22, 52]],     // 04 pre-dawn
+      [5.5,  [40, 50, 90], [110, 70, 90],[255, 160, 110]],  // 05:30 sunrise
+      [7,    [90, 130, 200],[160, 170, 200],[255, 200, 150]],// 07 morning glow
+      [9,    [70, 130, 210],[140, 180, 220],[200, 220, 245]],// 09 morning
+      [13,   [50, 100, 200],[120, 170, 220],[180, 210, 245]],// 13 noon clear
+      [17,   [90, 130, 200],[170, 150, 180],[255, 200, 130]],// 17 afternoon
+      [19,   [50, 50, 110], [200, 100, 80],[255, 130, 80]], // 19 sunset
+      [20.5, [20, 18, 50], [80, 50, 90], [180, 75, 80]],    // 20:30 dusk
+      [22,   [4, 6, 18],   [10, 14, 32], [30, 20, 40]],     // 22 night
+      [24,   [4, 6, 18],   [8, 12, 30],  [20, 14, 36]]
+    ];
+    function lerp(a, b, t) { return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+    function colorsAt(h) {
+      for (let i = 0; i < palette.length - 1; i++) {
+        if (h >= palette[i][0] && h <= palette[i + 1][0]) {
+          const t = (h - palette[i][0]) / (palette[i + 1][0] - palette[i][0]);
+          return [
+            lerp(palette[i][1], palette[i + 1][1], t),
+            lerp(palette[i][2], palette[i + 1][2], t),
+            lerp(palette[i][3], palette[i + 1][3], t)
+          ];
+        }
+      }
+      return [palette[0][1], palette[0][2], palette[0][3]];
+    }
+
+    // sun & moon trajectories
+    function sunPos(h) {
+      // rises at 6, sets at 20 (idealised)
+      const arcT = (h - 6) / 14;  // 0..1 from sunrise to sunset
+      if (arcT < 0 || arcT > 1) return null;
+      const x = arcT * W;
+      const y = HORIZON - Math.sin(arcT * Math.PI) * H * 0.75;
+      return [x, y];
+    }
+    function moonPos(h) {
+      // moon visible at night, opposite of sun. moonHour = h + 12
+      const mh = (h + 12) % 24;
+      const arcT = (mh - 6) / 14;
+      if (arcT < 0 || arcT > 1) return null;
+      const x = arcT * W;
+      const y = HORIZON - Math.sin(arcT * Math.PI) * H * 0.65;
+      return [x, y];
+    }
+
+    function frame() {
+      const speedFactor = parseFloat(document.getElementById('speed').value);
+      // 24 hours in 30 seconds at speed=60 (base); we step h based on real elapsed time
+      const now = performance.now() / 1000;
+      // h advances 24 hours every (30000/speedFactor*60) ms → derived
+      // simpler: h = (now * speedFactor / 60 * (24/30)) % 24
+      const hour = (now * speedFactor / 60 * (24 / 30)) % 24;
+
+      const [top, mid, hor] = colorsAt(hour);
+      const sky = ctx.createLinearGradient(0, 0, 0, HORIZON);
+      sky.addColorStop(0, `rgb(${top[0]|0},${top[1]|0},${top[2]|0})`);
+      sky.addColorStop(0.5, `rgb(${mid[0]|0},${mid[1]|0},${mid[2]|0})`);
+      sky.addColorStop(1, `rgb(${hor[0]|0},${hor[1]|0},${hor[2]|0})`);
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, W, HORIZON + 4);
+
+      // night-ness: how dark is it. 1 at midnight, 0 at noon
+      const nightDarkness = ((top[0] + top[1] + top[2]) / 3) < 40
+        ? 1
+        : Math.max(0, 1 - (top[0] + top[1] + top[2]) / 90);
+
+      // Milky Way visible at deep night only
+      if (nightDarkness > 0.4) {
+        ctx.globalAlpha = (nightDarkness - 0.4) / 0.6;
+        ctx.drawImage(mwCanvas, 0, 0);
+        ctx.globalAlpha = 1;
+      }
+
+      // stars visible when dark
+      if (nightDarkness > 0.15) {
+        ctx.globalCompositeOperation = 'lighter';
+        const visibility = (nightDarkness - 0.15) / 0.85;
+        const limitMag = 6.5 - (1 - visibility) * 6;
+        for (const s of stars) {
+          if (s.mag > limitMag) continue;
+          const tw = 0.85 + 0.15 * Math.sin(now * s.twSpeed + s.phase);
+          const f = s.flux * tw * visibility;
+          const [r, g, b] = s.color;
+          const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
+          if (f > 3) {
+            const len = Math.min(40, 5 + f * 3);
+            const aS = Math.min(0.5, f * 0.04);
+            const gH = ctx.createLinearGradient(s.x - len, s.y, s.x + len, s.y);
+            gH.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+            gH.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+            gH.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+            ctx.fillStyle = gH; ctx.fillRect(s.x - len, s.y - 0.5, len * 2, 1);
+            const gV = ctx.createLinearGradient(s.x, s.y - len, s.x, s.y + len);
+            gV.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+            gV.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+            gV.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+            ctx.fillStyle = gV; ctx.fillRect(s.x - 0.5, s.y - len, 1, len * 2);
+          }
+          ctx.fillStyle = f > 2 ? `rgba(255,255,255,${Math.min(1, f * 0.15)})` : `rgba(${r|0},${g|0},${b|0},${Math.min(1, f * 0.7)})`;
+          ctx.beginPath(); ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      // sun
+      const sp = sunPos(hour);
+      if (sp) {
+        const [sx, sy] = sp;
+        const r = 22 + Math.sin((hour - 13) / 14 * Math.PI) * 4;
+        // sun color depends on altitude
+        const altT = Math.max(0, Math.sin((hour - 6) / 14 * Math.PI));
+        const sunCol = altT > 0.4 ? '#fff8d0' : (altT > 0.15 ? '#ffd680' : '#ff8048');
+        const haloCol = altT > 0.4 ? 'rgba(255, 248, 200, 0.7)' : 'rgba(255, 160, 90, 0.85)';
+        const halo = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 8);
+        halo.addColorStop(0, haloCol);
+        halo.addColorStop(0.4, haloCol.replace('0.7', '0.25').replace('0.85', '0.35'));
+        halo.addColorStop(1, 'rgba(255, 200, 130, 0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(sx - r * 8, sy - r * 8, r * 16, r * 16);
+        ctx.fillStyle = sunCol;
+        ctx.beginPath(); ctx.arc(sx, sy, r * 0.6, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // moon
+      const mp = moonPos(hour);
+      if (mp && nightDarkness > 0.1) {
+        const [mx, my] = mp;
+        const r = 18;
+        ctx.globalAlpha = nightDarkness;
+        const halo = ctx.createRadialGradient(mx, my, 0, mx, my, r * 4);
+        halo.addColorStop(0, 'rgba(255, 245, 220, 0.45)');
+        halo.addColorStop(1, 'rgba(255, 245, 220, 0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(mx - r * 4, my - r * 4, r * 8, r * 8);
+        ctx.fillStyle = '#f5edd0';
+        ctx.beginPath(); ctx.arc(mx, my, r, 0, Math.PI * 2); ctx.fill();
+        // subtle craters
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        ctx.beginPath(); ctx.arc(mx - 5, my - 2, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(mx + 4, my + 5, 2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(mx + 2, my - 6, 1.5, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      // mountains (back layer = lighter, front = darker)
+      for (let i = 0; i < mountains.length; i++) {
+        const m = mountains[i];
+        const dayShade = 1 - nightDarkness;
+        // back layer slightly lighter
+        const base = i === 0 ? 4 + dayShade * 18 : 2 + dayShade * 8;
+        ctx.fillStyle = `rgb(${base},${base},${base + 3})`;
+        ctx.beginPath();
+        ctx.moveTo(m[0][0], H);
+        for (const [x, y] of m) ctx.lineTo(x, y);
+        ctx.lineTo(m[m.length - 1][0], H);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // clock
+      const hh = Math.floor(hour);
+      const mm = Math.floor((hour - hh) * 60);
+      document.getElementById('clock').textContent = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+
+      requestAnimationFrame(frame);
+    }
+    frame();
+
+    window.addEventListener('resize', () => {
+      resize();
+      buildStars();
+      buildMW();
+      buildMountains();
+    });
+  </script>
+</body>
+</html>

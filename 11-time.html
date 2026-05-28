@@ -231,40 +231,67 @@
         if (mY < 0.1) {
           const mr = 22;
           ctx.globalAlpha = night;
+
           // soft halo
           const mg = ctx.createRadialGradient(mpx, mpy, 0, mpx, mpy, mr * 4);
-          mg.addColorStop(0, 'rgba(255, 240, 220, 0.5)');
+          mg.addColorStop(0, 'rgba(255, 240, 220, 0.45)');
           mg.addColorStop(1, 'rgba(255, 240, 220, 0)');
           ctx.fillStyle = mg;
           ctx.fillRect(mpx - mr * 4, mpy - mr * 4, mr * 8, mr * 8);
 
-          // full moon disk
-          ctx.fillStyle = '#f5edd0';
-          ctx.beginPath();
-          ctx.arc(mpx, mpy, mr, 0, Math.PI * 2);
-          ctx.fill();
-
-          // shadow (phase): cover with dark using a second circle offset
-          // phase 0 = new (fully dark), 0.5 = full, 1 = new again
-          // compute illuminated fraction
-          const illum = (1 - Math.cos(phase * 2 * Math.PI)) / 2;
-          // shadow x offset
-          const offsetX = (phase < 0.5 ? -1 : 1) * mr * (1 - illum) * 2;
-          ctx.fillStyle = `rgb(${top[0]|0},${top[1]|0},${top[2]|0})`;
-          ctx.beginPath();
-          ctx.arc(mpx + offsetX, mpy, mr * 1.0, 0, Math.PI * 2);
-          ctx.fill();
-          // clip back the disk edge to keep it circular
-          ctx.fillStyle = '#f5edd0';
+          // moon phase rendered cleanly with clipping
           ctx.save();
           ctx.beginPath();
           ctx.arc(mpx, mpy, mr, 0, Math.PI * 2);
           ctx.clip();
-          ctx.beginPath();
-          ctx.arc(mpx + offsetX, mpy, mr * 1.0, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${top[0]|0},${top[1]|0},${top[2]|0},1)`;
-          ctx.fill();
+
+          // full bright disk
+          ctx.fillStyle = '#f5edd0';
+          ctx.fillRect(mpx - mr, mpy - mr, mr * 2, mr * 2);
+
+          // shadow ellipse: width depends on phase
+          // illuminated fraction
+          const illum = (1 - Math.cos(phase * 2 * Math.PI)) / 2;
+          // terminator x position (in moon coords, -mr..mr)
+          // phase 0 (new) → terminator at +mr (everything dark)
+          // phase 0.25 (first quarter) → terminator at 0 (left dark)
+          // phase 0.5 (full) → terminator at -mr (everything lit)
+          // phase 0.75 (last quarter) → terminator at 0 (right dark)
+          let termX, leftDark;
+          if (phase < 0.5) {
+            // waxing: dark on the left
+            termX = mr * (1 - 2 * illum);
+            leftDark = true;
+          } else {
+            // waning: dark on the right
+            termX = mr * (2 * illum - 1);
+            leftDark = false;
+          }
+
+          // shadow color = sky color (so the dark side blends with sky)
+          const shadowCol = `rgb(${top[0]|0},${top[1]|0},${top[2]|0})`;
+          ctx.fillStyle = shadowCol;
+          // fill the dark half (rectangle clipped by moon disk)
+          if (leftDark) {
+            ctx.fillRect(mpx - mr, mpy - mr, mr + termX, mr * 2);
+            // ellipse covering the curve
+            ctx.beginPath();
+            ctx.ellipse(mpx + termX, mpy, Math.abs(termX), mr, 0, Math.PI / 2, -Math.PI / 2, false);
+            ctx.fill();
+          } else {
+            ctx.fillRect(mpx + termX, mpy - mr, mr - termX, mr * 2);
+            ctx.beginPath();
+            ctx.ellipse(mpx + termX, mpy, Math.abs(termX), mr, 0, -Math.PI / 2, Math.PI / 2, false);
+            ctx.fill();
+          }
           ctx.restore();
+
+          // crisp moon outline
+          ctx.strokeStyle = 'rgba(255, 240, 220, 0.3)';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.arc(mpx, mpy, mr, 0, Math.PI * 2);
+          ctx.stroke();
 
           ctx.globalAlpha = 1;
         }
