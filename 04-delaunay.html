@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>04 · Delaunay constelaciones</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#04050a; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.45);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">04 · Bowyer–Watson Delaunay · aristas más cortas → constelaciones emergen</div>
+  <canvas id="c"></canvas>
+
+  <script>
+    // Bowyer-Watson incremental Delaunay (small n, fine for ~120 points)
+    function delaunay(points) {
+      // super-triangle big enough
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of points) {
+        if (p[0] < minX) minX = p[0]; if (p[1] < minY) minY = p[1];
+        if (p[0] > maxX) maxX = p[0]; if (p[1] > maxY) maxY = p[1];
+      }
+      const dx = (maxX - minX) * 10, dy = (maxY - minY) * 10;
+      const st = [
+        [minX - dx, minY - dy * 3],
+        [minX - dx, maxY + dy],
+        [maxX + dx * 3, maxY + dy]
+      ];
+      const pts = points.concat(st);
+      const stI = points.length;
+      let tris = [[stI, stI + 1, stI + 2]];
+
+      function circumcircle(a, b, c) {
+        const ax = pts[a][0], ay = pts[a][1];
+        const bx = pts[b][0], by = pts[b][1];
+        const cx = pts[c][0], cy = pts[c][1];
+        const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+        if (d === 0) return null;
+        const ux = ((ax*ax + ay*ay) * (by - cy) + (bx*bx + by*by) * (cy - ay) + (cx*cx + cy*cy) * (ay - by)) / d;
+        const uy = ((ax*ax + ay*ay) * (cx - bx) + (bx*bx + by*by) * (ax - cx) + (cx*cx + cy*cy) * (bx - ax)) / d;
+        const r2 = (ax - ux) * (ax - ux) + (ay - uy) * (ay - uy);
+        return [ux, uy, r2];
+      }
+
+      for (let i = 0; i < points.length; i++) {
+        const px = points[i][0], py = points[i][1];
+        const bad = [];
+        const remain = [];
+        for (const tri of tris) {
+          const cc = circumcircle(tri[0], tri[1], tri[2]);
+          if (cc && (px - cc[0]) * (px - cc[0]) + (py - cc[1]) * (py - cc[1]) < cc[2]) {
+            bad.push(tri);
+          } else {
+            remain.push(tri);
+          }
+        }
+        // polygon edges (count occurrences, keep unique)
+        const edgeCount = new Map();
+        for (const tri of bad) {
+          const es = [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]];
+          for (const e of es) {
+            const k = e[0] < e[1] ? `${e[0]}_${e[1]}` : `${e[1]}_${e[0]}`;
+            edgeCount.set(k, (edgeCount.get(k) || 0) + 1);
+          }
+        }
+        for (const [k, c] of edgeCount) {
+          if (c === 1) {
+            const [a, b] = k.split('_').map(Number);
+            remain.push([a, b, i]);
+          }
+        }
+        tris = remain;
+      }
+      // strip triangles touching super-triangle
+      return tris.filter(t => t[0] < stI && t[1] < stI && t[2] < stI);
+    }
+
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+
+    let stars = [], edges = [];
+
+    function build() {
+      // ~ 90-160 stars
+      const n = Math.floor(W * H / 12000);
+      stars = [];
+      for (let i = 0; i < n; i++) {
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          r: Math.random() < 0.08 ? 1.6 + Math.random() * 1.4 : 0.6 + Math.random() * 0.9,
+          alpha: 0.5 + Math.random() * 0.5,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+
+      const pts = stars.map(s => [s.x, s.y]);
+      const tris = delaunay(pts);
+
+      // collect unique edges with lengths
+      const map = new Map();
+      for (const t of tris) {
+        const es = [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]];
+        for (const [a, b] of es) {
+          const k = a < b ? `${a}_${b}` : `${b}_${a}`;
+          if (!map.has(k)) {
+            const dx = pts[a][0] - pts[b][0];
+            const dy = pts[a][1] - pts[b][1];
+            map.set(k, { a, b, d: Math.hypot(dx, dy) });
+          }
+        }
+      }
+      const all = [...map.values()].sort((x, y) => x.d - y.d);
+
+      // keep ~25% shortest edges, then filter to avoid super dense degree
+      const cutoff = all[Math.floor(all.length * 0.22)]?.d || 0;
+      const degree = new Array(stars.length).fill(0);
+      edges = [];
+      for (const e of all) {
+        if (e.d > cutoff) break;
+        if (degree[e.a] >= 3 || degree[e.b] >= 3) continue;
+        edges.push(e);
+        degree[e.a]++; degree[e.b]++;
+      }
+    }
+    build();
+
+    const t0 = performance.now();
+    function draw() {
+      const t = (performance.now() - t0) / 1000;
+      ctx.fillStyle = '#04050a';
+      ctx.fillRect(0, 0, W, H);
+
+      // edges with slow shimmer
+      ctx.lineCap = 'round';
+      for (const e of edges) {
+        const a = stars[e.a], b = stars[e.b];
+        const shimmer = 0.25 + 0.15 * Math.sin(t * 0.4 + (e.a + e.b) * 0.3);
+        ctx.strokeStyle = `rgba(180, 195, 255, ${shimmer})`;
+        ctx.lineWidth = 0.6;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+
+      // stars
+      for (const s of stars) {
+        const tw = 0.8 + 0.2 * Math.sin(t * 1.1 + s.phase);
+        const a = s.alpha * tw;
+        ctx.fillStyle = `rgba(255,255,255,${a})`;
+        ctx.shadowColor = 'rgba(255,255,255,0.7)';
+        ctx.shadowBlur = 6 + s.r * 4;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    window.addEventListener('resize', () => { resize(); build(); });
+  </script>
+</body>
+</html>

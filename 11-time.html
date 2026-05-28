@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>11 · time-aware sky</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+      mix-blend-mode: difference;
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+      mix-blend-mode: difference;
+    }
+    #panel {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: #fff; mix-blend-mode: difference;
+      background: rgba(0,0,0,0.0);
+      padding: 6px 0;
+    }
+    #panel .row { margin-bottom: 4px; }
+    #panel input[type=range] {
+      width: 200px; vertical-align: middle;
+    }
+    #now { color: #ffe6a8; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">11 · cielo según hora local · día/atardecer/noche/amanecer · luna real</div>
+  <div id="panel">
+    <div class="row"><span id="now"></span></div>
+    <div class="row">
+      hora simulada: <span id="hLabel">auto</span><br>
+      <input type="range" id="hSlider" min="-1" max="24" step="0.05" value="-1">
+    </div>
+  </div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', () => { resize(); buildStars(); });
+
+    // generate stars (only visible at night)
+    let stars = [];
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * H / 3500);
+      for (let i = 0; i < n; i++) {
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * H * 0.7, // mostly upper sky
+          r: Math.random() < 0.04 ? 1.6 + Math.random() * 1.2 : 0.4 + Math.random() * 0.9,
+          a: 0.3 + Math.random() * 0.7,
+          phase: Math.random() * Math.PI * 2,
+          color: Math.random() < 0.1 ? '#c8d8ff' : (Math.random() < 0.15 ? '#ffd6a8' : '#fff')
+        });
+      }
+    }
+    buildStars();
+
+    // moon phase calculation (simplified)
+    function moonPhase(date) {
+      // Returns 0..1 (0 = new moon, 0.5 = full)
+      // Reference new moon: 2000-01-06 18:14 UTC
+      const ref = Date.UTC(2000, 0, 6, 18, 14) / 1000;
+      const synodic = 29.530588853 * 86400;
+      const t = date.getTime() / 1000 - ref;
+      const phase = ((t % synodic) + synodic) % synodic / synodic;
+      return phase;
+    }
+
+    // color stops for sky depending on hour (0..24)
+    // arrays of [hour, topColor, bottomColor]
+    const skyStops = [
+      [0,    [4, 6, 18],   [8, 12, 30]],     // deep night
+      [5,    [16, 20, 50], [60, 50, 90]],    // pre-dawn
+      [6.5,  [50, 90, 160],[255, 180, 130]], // sunrise
+      [8,    [100, 150, 220],[180, 200, 240]],// morning
+      [12,   [80, 140, 220],[170, 200, 240]],// noon
+      [17,   [120, 130, 200],[255, 200, 130]],// late afternoon
+      [19,   [60, 50, 100],[255, 130, 90]],  // sunset
+      [20.5, [10, 14, 40], [70, 40, 90]],    // dusk
+      [22,   [4, 6, 18],   [8, 12, 30]],     // night
+      [24,   [4, 6, 18],   [8, 12, 30]]
+    ];
+
+    function lerpColor(a, b, t) {
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    }
+    function colorsAt(hour) {
+      for (let i = 0; i < skyStops.length - 1; i++) {
+        if (hour >= skyStops[i][0] && hour <= skyStops[i + 1][0]) {
+          const t = (hour - skyStops[i][0]) / (skyStops[i + 1][0] - skyStops[i][0]);
+          return [lerpColor(skyStops[i][1], skyStops[i + 1][1], t),
+                  lerpColor(skyStops[i][2], skyStops[i + 1][2], t)];
+        }
+      }
+      return [skyStops[0][1], skyStops[0][2]];
+    }
+
+    // sun position (above/below horizon)
+    function sunY(hour) {
+      // arc: rises at 6, peaks at 13, sets at 20
+      const a = Math.PI * (hour - 6) / 14;
+      const yArc = -Math.sin(a); // -1 at noon, 0 at sunrise/sunset, positive at night
+      return yArc;
+    }
+    function sunX(hour) {
+      return (hour - 6) / 14;
+    }
+
+    // night intensity 0..1 — fully night below horizon
+    function nightAlpha(hour) {
+      const y = sunY(hour);
+      if (y >= 0.05) return Math.min(1, (y - 0.05) / 0.2);
+      return 0;
+    }
+
+    const hSlider = document.getElementById('hSlider');
+    const hLabel = document.getElementById('hLabel');
+    const nowEl = document.getElementById('now');
+
+    function getHour() {
+      const v = parseFloat(hSlider.value);
+      if (v < 0) {
+        // auto: real time
+        const d = new Date();
+        return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+      }
+      return v;
+    }
+
+    function fmt(h) {
+      const hh = Math.floor(h);
+      const mm = Math.floor((h - hh) * 60);
+      return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+    }
+
+    function updateLabels() {
+      const v = parseFloat(hSlider.value);
+      hLabel.textContent = v < 0 ? `auto (${fmt(getHour())})` : fmt(v);
+    }
+    hSlider.addEventListener('input', updateLabels);
+    updateLabels();
+
+    setInterval(() => {
+      const now = new Date();
+      nowEl.textContent = `ahora: ${now.toLocaleTimeString('es-ES')} · luna ${(moonPhase(now) * 100).toFixed(0)}%`;
+      updateLabels();
+    }, 1000);
+
+    const t0 = performance.now();
+    function draw() {
+      const t = (performance.now() - t0) / 1000;
+      const hour = getHour();
+      const [top, bot] = colorsAt(hour);
+      const grd = ctx.createLinearGradient(0, 0, 0, H);
+      grd.addColorStop(0, `rgb(${top[0]|0},${top[1]|0},${top[2]|0})`);
+      grd.addColorStop(1, `rgb(${bot[0]|0},${bot[1]|0},${bot[2]|0})`);
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, H);
+
+      const night = nightAlpha(hour);
+
+      // stars (only visible at night)
+      if (night > 0) {
+        for (const s of stars) {
+          const tw = 0.7 + 0.3 * Math.sin(t * 1.5 + s.phase);
+          ctx.fillStyle = s.color;
+          ctx.globalAlpha = s.a * tw * night;
+          ctx.shadowColor = s.color;
+          ctx.shadowBlur = 5 + s.r * 3;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      }
+
+      // sun
+      const sY = sunY(hour);
+      const sX = sunX(hour);
+      const px = sX * W;
+      const py = H * 0.85 + sY * H * 0.7; // when sY = -1 (noon) → high
+      if (sY < 0.05) {
+        const sunRad = 28;
+        const sunGrad = ctx.createRadialGradient(px, py, 0, px, py, sunRad * 5);
+        sunGrad.addColorStop(0, 'rgba(255, 240, 200, 0.95)');
+        sunGrad.addColorStop(0.2, 'rgba(255, 200, 130, 0.6)');
+        sunGrad.addColorStop(1, 'rgba(255, 200, 130, 0)');
+        ctx.fillStyle = sunGrad;
+        ctx.fillRect(px - sunRad * 5, py - sunRad * 5, sunRad * 10, sunRad * 10);
+        ctx.fillStyle = '#fff5d0';
+        ctx.beginPath();
+        ctx.arc(px, py, sunRad * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // moon — visible roughly during night (sun below horizon)
+      if (night > 0.2) {
+        const now = new Date();
+        const phase = moonPhase(now); // 0..1
+        // moon position: offset from sun by ~180°
+        const moonHour = (hour + 12) % 24;
+        const mY = sunY(moonHour);
+        const mX = sunX(moonHour);
+        const mpx = mX * W;
+        const mpy = H * 0.85 + mY * H * 0.6;
+        if (mY < 0.1) {
+          const mr = 22;
+          ctx.globalAlpha = night;
+          // soft halo
+          const mg = ctx.createRadialGradient(mpx, mpy, 0, mpx, mpy, mr * 4);
+          mg.addColorStop(0, 'rgba(255, 240, 220, 0.5)');
+          mg.addColorStop(1, 'rgba(255, 240, 220, 0)');
+          ctx.fillStyle = mg;
+          ctx.fillRect(mpx - mr * 4, mpy - mr * 4, mr * 8, mr * 8);
+
+          // full moon disk
+          ctx.fillStyle = '#f5edd0';
+          ctx.beginPath();
+          ctx.arc(mpx, mpy, mr, 0, Math.PI * 2);
+          ctx.fill();
+
+          // shadow (phase): cover with dark using a second circle offset
+          // phase 0 = new (fully dark), 0.5 = full, 1 = new again
+          // compute illuminated fraction
+          const illum = (1 - Math.cos(phase * 2 * Math.PI)) / 2;
+          // shadow x offset
+          const offsetX = (phase < 0.5 ? -1 : 1) * mr * (1 - illum) * 2;
+          ctx.fillStyle = `rgb(${top[0]|0},${top[1]|0},${top[2]|0})`;
+          ctx.beginPath();
+          ctx.arc(mpx + offsetX, mpy, mr * 1.0, 0, Math.PI * 2);
+          ctx.fill();
+          // clip back the disk edge to keep it circular
+          ctx.fillStyle = '#f5edd0';
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(mpx, mpy, mr, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.beginPath();
+          ctx.arc(mpx + offsetX, mpy, mr * 1.0, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${top[0]|0},${top[1]|0},${top[2]|0},1)`;
+          ctx.fill();
+          ctx.restore();
+
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // horizon line / ground
+      const horizonY = H * 0.85;
+      const groundGrad = ctx.createLinearGradient(0, horizonY, 0, H);
+      const gTop = night > 0 ? [5, 6, 10] : [40, 30, 25];
+      const gBot = night > 0 ? [0, 0, 0] : [10, 6, 4];
+      groundGrad.addColorStop(0, `rgb(${gTop[0]},${gTop[1]},${gTop[2]})`);
+      groundGrad.addColorStop(1, `rgb(${gBot[0]},${gBot[1]},${gBot[2]})`);
+      ctx.fillStyle = groundGrad;
+      ctx.fillRect(0, horizonY, W, H - horizonY);
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>

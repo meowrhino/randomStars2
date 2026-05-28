@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>05 · HYG real catalog</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#020308; color:#fff; }
+    canvas { display:block; width:100vw; height:100vh; cursor:crosshair; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.45);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+    #info {
+      position: fixed; top: 16px; right: 16px;
+      color: rgba(255,255,255,0.8);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      background: rgba(0,0,0,0.5);
+      padding: 8px 12px; border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.15);
+      min-width: 180px;
+      pointer-events: none;
+    }
+    #info .n { color: #ffe6a8; font-weight: 600; }
+    #info .d { color: #8a8ea8; font-size: 10px; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">05 · catálogo real (Hipparcos/Bayer) · pasa el cursor sobre una estrella</div>
+  <div id="info">hover una estrella</div>
+  <canvas id="c"></canvas>
+
+  <script>
+    // Curated subset of bright real stars (Bayer designations, Hipparcos data).
+    // RA in hours, Dec in degrees, mag = visual magnitude
+    // name, RA, Dec, mag, color (B-V proxy)
+    const STARS = [
+      // Orion
+      ["Betelgeuse",        5.92,  7.41,  0.45, "#ffb070"],
+      ["Rigel",             5.24, -8.20,  0.18, "#a8c8ff"],
+      ["Bellatrix",         5.42,  6.35,  1.64, "#c8d8ff"],
+      ["Saiph",             5.80, -9.67,  2.06, "#c8d8ff"],
+      ["Mintaka",           5.53, -0.30,  2.23, "#c8d8ff"],
+      ["Alnilam",           5.60, -1.20,  1.70, "#c8d8ff"],
+      ["Alnitak",           5.68, -1.94,  1.74, "#c8d8ff"],
+      ["Meissa",            5.59,  9.93,  3.39, "#c8d8ff"],
+      // Canis Major
+      ["Sirius",            6.75, -16.71, -1.46, "#fff"],
+      ["Adhara",            6.98, -28.97, 1.50, "#c8d8ff"],
+      ["Wezen",             7.14, -26.39, 1.83, "#fff5d0"],
+      ["Mirzam",            6.38, -17.95, 1.98, "#c8d8ff"],
+      // Ursa Major (Big Dipper)
+      ["Dubhe",            11.06, 61.75,  1.81, "#ffd6a8"],
+      ["Merak",            11.03, 56.38,  2.34, "#c8d8ff"],
+      ["Phecda",           11.90, 53.69,  2.41, "#c8d8ff"],
+      ["Megrez",           12.26, 57.03,  3.31, "#c8d8ff"],
+      ["Alioth",           12.90, 55.96,  1.76, "#c8d8ff"],
+      ["Mizar",            13.42, 54.93,  2.23, "#c8d8ff"],
+      ["Alkaid",           13.79, 49.31,  1.85, "#c8d8ff"],
+      // Cassiopeia
+      ["Schedar",           0.67, 56.54,  2.24, "#ffd6a8"],
+      ["Caph",              0.15, 59.15,  2.27, "#fff5d0"],
+      ["Gamma Cas",         0.95, 60.72,  2.47, "#c8d8ff"],
+      ["Ruchbah",           1.43, 60.24,  2.68, "#c8d8ff"],
+      ["Segin",             1.91, 63.67,  3.35, "#c8d8ff"],
+      // Cygnus
+      ["Deneb",            20.69, 45.28,  1.25, "#fff"],
+      ["Sadr",             20.37, 40.26,  2.23, "#fff5d0"],
+      ["Gienah",           20.77, 33.97,  2.48, "#ffd6a8"],
+      ["Albireo",          19.51, 27.96,  3.18, "#ffb070"],
+      ["Delta Cyg",        19.75, 45.13,  2.87, "#c8d8ff"],
+      // Lyra
+      ["Vega",             18.62, 38.78,  0.03, "#fff"],
+      ["Sheliak",          18.83, 33.36,  3.45, "#c8d8ff"],
+      ["Sulafat",          18.98, 32.69,  3.24, "#c8d8ff"],
+      // Aquila
+      ["Altair",           19.85, 8.87,   0.76, "#fff"],
+      ["Tarazed",          19.77, 10.61,  2.72, "#ffd6a8"],
+      ["Alshain",          19.92, 6.41,   3.71, "#fff5d0"],
+      // Bootes
+      ["Arcturus",         14.26, 19.18, -0.05, "#ffd6a8"],
+      ["Izar",             14.75, 27.07,  2.35, "#ffb070"],
+      ["Muphrid",          13.91, 18.40,  2.68, "#fff5d0"],
+      // Leo
+      ["Regulus",          10.14, 11.97,  1.36, "#c8d8ff"],
+      ["Denebola",         11.82, 14.57,  2.13, "#fff"],
+      ["Algieba",          10.33, 19.84,  2.28, "#ffd6a8"],
+      ["Zosma",            11.24, 20.52,  2.56, "#fff"],
+      // Taurus
+      ["Aldebaran",         4.60, 16.51,  0.85, "#ffb070"],
+      ["Elnath",            5.44, 28.61,  1.65, "#c8d8ff"],
+      // Gemini
+      ["Pollux",            7.76, 28.03,  1.14, "#ffd6a8"],
+      ["Castor",            7.58, 31.89,  1.58, "#fff"],
+      // Scorpius
+      ["Antares",          16.49, -26.43, 1.06, "#ffb070"],
+      ["Shaula",           17.56, -37.10, 1.62, "#c8d8ff"],
+      ["Sargas",           17.62, -42.99, 1.86, "#fff5d0"],
+      ["Dschubba",         16.00, -22.62, 2.29, "#c8d8ff"],
+      // Sagittarius (teapot)
+      ["Kaus Australis",   18.40, -34.38, 1.79, "#c8d8ff"],
+      ["Nunki",            18.92, -26.30, 2.05, "#c8d8ff"],
+      // Virgo
+      ["Spica",            13.42, -11.16, 0.97, "#c8d8ff"],
+      // Pegasus (Great Square)
+      ["Markab",           23.08, 15.21,  2.49, "#c8d8ff"],
+      ["Scheat",           23.06, 28.08,  2.42, "#ffb070"],
+      ["Algenib",           0.22, 15.18,  2.83, "#c8d8ff"],
+      ["Alpheratz",         0.14, 29.09,  2.06, "#c8d8ff"],
+      // Auriga
+      ["Capella",           5.28, 45.99,  0.08, "#fff5d0"],
+      ["Menkalinan",        5.99, 44.95,  1.90, "#fff"],
+      // Perseus
+      ["Mirfak",            3.41, 49.86,  1.79, "#fff5d0"],
+      ["Algol",             3.14, 40.96,  2.12, "#c8d8ff"],
+      // Andromeda
+      ["Mirach",            1.16, 35.62,  2.05, "#ffb070"],
+      ["Almach",            2.07, 42.33,  2.10, "#ffd6a8"],
+      // Pisces, others as filler
+      ["Hamal",             2.12, 23.46,  2.00, "#ffd6a8"],
+      ["Polaris",            2.53, 89.26,  1.98, "#fff5d0"],
+      ["Fomalhaut",         22.96, -29.62, 1.16, "#fff"]
+    ];
+
+    // Constellation line definitions: arrays of star-name pairs
+    const LINES = {
+      "Orion":      [["Betelgeuse","Bellatrix"],["Bellatrix","Mintaka"],["Mintaka","Alnilam"],["Alnilam","Alnitak"],["Alnitak","Saiph"],["Saiph","Rigel"],["Rigel","Mintaka"],["Betelgeuse","Alnitak"],["Bellatrix","Meissa"],["Betelgeuse","Meissa"]],
+      "Ursa Major": [["Dubhe","Merak"],["Merak","Phecda"],["Phecda","Megrez"],["Megrez","Dubhe"],["Megrez","Alioth"],["Alioth","Mizar"],["Mizar","Alkaid"]],
+      "Cassiopeia": [["Caph","Schedar"],["Schedar","Gamma Cas"],["Gamma Cas","Ruchbah"],["Ruchbah","Segin"]],
+      "Cygnus":     [["Deneb","Sadr"],["Sadr","Albireo"],["Gienah","Sadr"],["Delta Cyg","Sadr"]],
+      "Lyra":       [["Vega","Sheliak"],["Sheliak","Sulafat"],["Sulafat","Vega"]],
+      "Canis Major":[["Sirius","Mirzam"],["Sirius","Adhara"],["Adhara","Wezen"],["Wezen","Sirius"]],
+      "Leo":        [["Regulus","Algieba"],["Algieba","Zosma"],["Zosma","Denebola"],["Denebola","Regulus"]],
+      "Gemini":     [["Castor","Pollux"]],
+      "Scorpius":   [["Dschubba","Antares"],["Antares","Shaula"],["Shaula","Sargas"]],
+      "Bootes":     [["Arcturus","Muphrid"],["Arcturus","Izar"]],
+      "Aquila":     [["Tarazed","Altair"],["Altair","Alshain"]],
+      "Pegasus":    [["Markab","Scheat"],["Scheat","Alpheratz"],["Alpheratz","Algenib"],["Algenib","Markab"]],
+      "Cassiopeia → Andromeda": [["Alpheratz","Mirach"],["Mirach","Almach"]]
+    };
+
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const info = document.getElementById('info');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Mercator-like projection: RA wraps, Dec linear, with stretch
+    function project(ra, dec) {
+      // RA 0..24 → x. dec -90..90 → y. We center on RA 6h (winter sky)
+      // but we apply a slow rotation in time
+      const rotRA = (performance.now() * 0.000004) % 24;
+      let raAdj = (ra - rotRA + 24) % 24;
+      // shift to -12..12 so center is "middle"
+      if (raAdj > 12) raAdj -= 24;
+      const x = (0.5 + raAdj / 24 * 1.6) * W;
+      const y = (0.5 - dec / 90 * 0.7) * H;
+      return [x, y];
+    }
+
+    // background random faint stars (Poisson-ish)
+    const faint = [];
+    function buildFaint() {
+      faint.length = 0;
+      const n = Math.floor(W * H / 4000);
+      for (let i = 0; i < n; i++) {
+        faint.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          r: 0.3 + Math.random() * 0.5,
+          a: 0.2 + Math.random() * 0.5
+        });
+      }
+    }
+    buildFaint();
+    window.addEventListener('resize', buildFaint);
+
+    let hovered = null;
+    canvas.addEventListener('mousemove', e => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      let best = null, bestD = 25;
+      for (const s of STARS) {
+        const [x, y] = project(s[1], s[2]);
+        const d = Math.hypot(x - mx, y - my);
+        if (d < bestD) { bestD = d; best = s; }
+      }
+      hovered = best;
+      if (best) {
+        const constellation = Object.entries(LINES).find(([k, ls]) =>
+          ls.some(([a, b]) => a === best[0] || b === best[0])
+        )?.[0] || "—";
+        info.innerHTML = `<span class="n">${best[0]}</span><br>
+          <span class="d">mag ${best[3].toFixed(2)} · RA ${best[1].toFixed(2)}h · Dec ${best[2].toFixed(1)}°</span><br>
+          <span class="d">${constellation}</span>`;
+      } else {
+        info.textContent = 'hover una estrella';
+      }
+    });
+
+    function sizeFromMag(mag) {
+      // brighter = lower mag = bigger
+      return Math.max(0.5, 3.6 - mag * 0.5);
+    }
+
+    function draw() {
+      ctx.fillStyle = '#020308';
+      ctx.fillRect(0, 0, W, H);
+
+      // faint background stars
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      for (const f of faint) {
+        ctx.globalAlpha = f.a;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      // constellation lines
+      for (const [name, pairs] of Object.entries(LINES)) {
+        ctx.strokeStyle = 'rgba(180, 200, 255, 0.35)';
+        ctx.lineWidth = 0.8;
+        ctx.setLineDash([2, 5]);
+        ctx.beginPath();
+        for (const [a, b] of pairs) {
+          const sa = STARS.find(s => s[0] === a);
+          const sb = STARS.find(s => s[0] === b);
+          if (!sa || !sb) continue;
+          const [ax, ay] = project(sa[1], sa[2]);
+          const [bx, by] = project(sb[1], sb[2]);
+          // skip lines wrapping across screen
+          if (Math.abs(ax - bx) > W * 0.5) continue;
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // real bright stars
+      for (const s of STARS) {
+        const [x, y] = project(s[1], s[2]);
+        if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
+        const r = sizeFromMag(s[3]);
+        const isHover = hovered && hovered[0] === s[0];
+
+        ctx.shadowColor = s[4];
+        ctx.shadowBlur = r * 6;
+        ctx.fillStyle = s[4];
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        if (isHover) {
+          ctx.strokeStyle = '#ffe6a8';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(x, y, r + 6, 0, Math.PI * 2);
+          ctx.stroke();
+          // label
+          ctx.fillStyle = '#ffe6a8';
+          ctx.font = '12px ui-monospace, monospace';
+          ctx.fillText(s[0], x + 10, y - 8);
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>

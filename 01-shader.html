@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>01 · GLSL shader sky</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(6px);
+    }
+    .back:hover { color: #fff; border-color: rgba(255,255,255,0.6); }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.45);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">01 · fragment shader · cells + temperature</div>
+  <canvas id="c"></canvas>
+
+  <script id="vs" type="x-shader/x-vertex">
+    attribute vec2 aPos;
+    void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+  </script>
+
+  <script id="fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform vec2 uRes;
+    uniform float uTime;
+
+    // hash
+    vec2 hash22(vec2 p) {
+      p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+      return fract(sin(p) * 43758.5453) * 2.0 - 1.0;
+    }
+    float hash12(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+
+    // stars from a single cell layer
+    vec3 starsLayer(vec2 uv, float scale, float density, float baseSize) {
+      vec2 g = uv * scale;
+      vec2 cell = floor(g);
+      vec2 f = fract(g);
+
+      vec3 col = vec3(0.0);
+      // check this cell only (cheap)
+      float skip = step(density, hash12(cell));
+      if (skip > 0.5) return col;
+
+      // random offset inside cell
+      vec2 r = hash22(cell) * 0.5 + 0.5;
+      vec2 d = f - r;
+      float dist = length(d);
+
+      // size from random
+      float sz = baseSize * (0.4 + hash12(cell + 17.3) * 0.9);
+
+      // temperature → color (cool red ←→ blue)
+      float temp = hash12(cell + 51.2);
+      vec3 cold = vec3(0.55, 0.7, 1.0);
+      vec3 warm = vec3(1.0, 0.78, 0.55);
+      vec3 white = vec3(1.0);
+      vec3 starCol = mix(warm, white, smoothstep(0.0, 0.5, temp));
+      starCol = mix(starCol, cold, smoothstep(0.5, 1.0, temp));
+
+      // twinkle phase per-cell
+      float ph = hash12(cell + 91.1) * 6.2831;
+      float tw = 0.75 + 0.25 * sin(uTime * 1.3 + ph);
+
+      // core + halo
+      float core = exp(-dist * dist / (sz * sz * 0.7)) * tw;
+      float halo = exp(-dist / (sz * 2.5)) * 0.4 * tw;
+      col += starCol * (core * 1.4 + halo);
+      return col;
+    }
+
+    // soft nebula via fbm of hash noise
+    float valNoise(vec2 p) {
+      vec2 i = floor(p); vec2 f = fract(p);
+      float a = hash12(i);
+      float b = hash12(i + vec2(1,0));
+      float c = hash12(i + vec2(0,1));
+      float d = hash12(i + vec2(1,1));
+      vec2 u = f*f*(3.0-2.0*f);
+      return mix(mix(a,b,u.x), mix(c,d,u.x), u.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0, a = 0.5;
+      for (int i = 0; i < 5; i++) { v += a * valNoise(p); p *= 2.02; a *= 0.5; }
+      return v;
+    }
+
+    void main() {
+      vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+
+      // deep base gradient
+      vec3 bg = mix(vec3(0.01, 0.01, 0.04), vec3(0.04, 0.02, 0.08), uv.y * 0.5 + 0.5);
+
+      // subtle nebula
+      float n = fbm(uv * 1.5 + vec2(uTime * 0.01, 0.0));
+      vec3 neb = mix(vec3(0.04, 0.0, 0.08), vec3(0.0, 0.06, 0.1), n);
+      bg += neb * smoothstep(0.4, 0.9, n) * 0.5;
+
+      // 3 layers of stars at different scales/densities
+      vec3 col = bg;
+      col += starsLayer(uv, 80.0, 0.18, 0.04);
+      col += starsLayer(uv + 13.0, 200.0, 0.10, 0.02);
+      col += starsLayer(uv + 41.0, 400.0, 0.06, 0.012);
+
+      // very subtle vignette
+      float vig = 1.0 - dot(uv, uv) * 0.4;
+      col *= vig;
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  </script>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const gl = canvas.getContext('webgl', { antialias: true });
+    if (!gl) {
+      document.body.innerHTML = '<p style="color:#fff;font-family:monospace;padding:40px;">WebGL no disponible</p>';
+      throw new Error('no webgl');
+    }
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = window.innerWidth * dpr;
+      canvas.height = window.innerHeight * dpr;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function compile(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s));
+      }
+      return s;
+    }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, document.getElementById('vs').textContent));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+    gl.linkProgram(prog);
+    gl.useProgram(prog);
+
+    // full-screen quad
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+    const uRes = gl.getUniformLocation(prog, 'uRes');
+    const uTime = gl.getUniformLocation(prog, 'uTime');
+
+    const t0 = performance.now();
+    function frame() {
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+      gl.uniform1f(uTime, (performance.now() - t0) / 1000);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

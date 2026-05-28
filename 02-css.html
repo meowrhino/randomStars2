@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>02 · CSS only stars</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* No JS. Stars are CSS box-shadows. Parallax with keyframes. */
+    html, body {
+      margin: 0; padding: 0;
+      width: 100vw; height: 100vh;
+      overflow: hidden;
+      background: radial-gradient(ellipse at top, #0d1126 0%, #04050a 60%, #000 100%);
+    }
+    .layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 1px; height: 1px;
+      border-radius: 50%;
+      background: transparent;
+      will-change: transform;
+    }
+
+    /* layer 1 — small far stars, slow drift */
+    .l1 {
+      box-shadow:
+        103px 412px #fff, 271px 88px #fff, 522px 311px #fff, 765px 192px #fff,
+        890px 622px #fff, 1100px 87px #fff, 1233px 466px #fff, 47px 711px #fff,
+        301px 555px #fff, 612px 644px #fff, 988px 311px #fff, 1311px 245px #fff,
+        88px 211px #fff, 144px 833px #fff, 411px 188px #fff, 700px 401px #fff,
+        833px 511px #fff, 1077px 700px #fff, 1422px 533px #fff, 88px 88px #fff,
+        222px 311px #fff, 365px 477px #fff, 444px 766px #fff, 666px 100px #fff,
+        744px 855px #fff, 877px 388px #fff, 999px 144px #fff, 1188px 822px #fff,
+        1366px 388px #fff, 1411px 766px #fff, 200px 600px #fff, 333px 244px #fff,
+        450px 533px #fff, 511px 7px #fff, 588px 277px #fff, 633px 822px #fff,
+        711px 322px #fff, 800px 766px #fff, 933px 488px #fff, 1044px 233px #fff,
+        1166px 600px #fff, 1255px 88px #fff, 1300px 700px #fff, 1450px 211px #fff,
+        15px 144px #fff, 60px 322px #fff, 122px 500px #fff, 180px 766px #fff,
+        260px 211px #fff, 390px 366px #fff, 420px 88px #fff, 540px 444px #fff,
+        577px 666px #fff, 622px 188px #fff, 680px 277px #fff, 740px 555px #fff,
+        790px 100px #fff, 850px 333px #fff, 905px 800px #fff, 950px 233px #fff,
+        1020px 555px #fff, 1090px 122px #fff, 1140px 422px #fff, 1200px 144px #fff,
+        1280px 466px #fff, 1330px 866px #fff, 1380px 100px #fff, 1430px 488px #fff,
+        70px 500px #fff, 130px 122px #fff, 175px 422px #fff, 244px 700px #fff,
+        290px 333px #fff, 333px 833px #fff, 388px 222px #fff, 433px 633px #fff,
+        488px 444px #fff, 533px 100px #fff, 588px 555px #fff, 644px 388px #fff,
+        700px 122px #fff, 755px 233px #fff, 811px 666px #fff, 866px 144px #fff,
+        922px 555px #fff, 977px 277px #fff, 1033px 800px #fff, 1088px 388px #fff,
+        1144px 233px #fff, 1199px 666px #fff, 1255px 500px #fff, 1311px 122px #fff;
+      animation: drift 240s linear infinite, twinkle1 5s ease-in-out infinite alternate;
+    }
+
+    /* layer 2 — medium stars, faster drift, slight glow */
+    .l2 {
+      width: 2px; height: 2px;
+      box-shadow:
+        180px 250px #fff, 540px 420px #fff, 820px 90px #fff, 1100px 510px #fff,
+        90px 600px #fff, 360px 730px #fff, 660px 200px #fff, 980px 770px #fff,
+        1200px 320px #fff, 1400px 88px #fff, 222px 444px #ffe6a8,
+        680px 580px #ffe6a8, 1020px 222px #c8d8ff, 1322px 622px #ffd6c8,
+        444px 122px #fff, 800px 350px #fff, 1080px 480px #fff,
+        300px 800px #fff, 720px 660px #fff, 950px 100px #fff,
+        50px 350px #fff, 410px 250px #fff, 600px 770px #fff,
+        890px 280px #fff, 1140px 700px #fff, 1300px 200px #c8d8ff,
+        222px 88px #fff, 488px 600px #fff, 766px 220px #fff;
+      animation: drift 180s linear infinite reverse, twinkle2 3.5s ease-in-out infinite alternate;
+    }
+
+    /* layer 3 — close, bigger, slowest twinkle */
+    .l3 {
+      width: 3px; height: 3px;
+      box-shadow:
+        300px 200px #fff, 700px 500px #fff, 1100px 250px #ffd6a8,
+        400px 700px #c8d8ff, 900px 660px #fff, 200px 450px #fff,
+        1300px 600px #fff, 500px 100px #fff, 1000px 800px #ffe0c8;
+      filter: drop-shadow(0 0 4px #fff);
+      animation: drift 120s linear infinite, twinkle3 4s ease-in-out infinite alternate;
+    }
+
+    /* shooting star */
+    .shoot {
+      position: absolute;
+      top: 10%; left: -10%;
+      width: 120px; height: 1px;
+      background: linear-gradient(90deg, transparent, #fff, transparent);
+      filter: drop-shadow(0 0 4px #fff);
+      animation: shoot 9s linear infinite;
+      animation-delay: 2s;
+      transform: rotate(15deg);
+    }
+    .shoot.b {
+      top: 30%;
+      animation-duration: 13s;
+      animation-delay: 5.5s;
+      transform: rotate(8deg);
+    }
+
+    @keyframes drift {
+      0%   { transform: translate(0, 0); }
+      100% { transform: translate(-1500px, 50px); }
+    }
+    @keyframes twinkle1 { 0% { opacity: .6; } 100% { opacity: 1; } }
+    @keyframes twinkle2 { 0% { opacity: .5; } 100% { opacity: 1; } }
+    @keyframes twinkle3 { 0% { opacity: .7; } 100% { opacity: 1; } }
+    @keyframes shoot {
+      0%   { transform: translate(0, 0) rotate(15deg); opacity: 0; }
+      5%   { opacity: 1; }
+      40%  { opacity: 1; }
+      60%  { opacity: 0; }
+      100% { transform: translate(120vw, 30vh) rotate(15deg); opacity: 0; }
+    }
+
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color: #fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.45);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">02 · 100% CSS · box-shadow trick · sin JS</div>
+  <div class="layer l1"></div>
+  <div class="layer l2"></div>
+  <div class="layer l3"></div>
+  <div class="shoot"></div>
+  <div class="shoot b"></div>
+</body>
+</html>

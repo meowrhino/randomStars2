@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>07 · ASCII night sky</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body {
+      margin:0; padding:0; width:100vw; height:100vh; overflow:hidden;
+      background:#06070d; color:#dfe3ff;
+      font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+    }
+    #sky {
+      position: absolute; inset: 0;
+      margin: 0; padding: 0;
+      font-size: 14px;
+      line-height: 14px;
+      letter-spacing: 0;
+      white-space: pre;
+      overflow: hidden;
+      user-select: none;
+    }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(223,227,255,0.6);
+      font-size: 12px; text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(223,227,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.5);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(223,227,255,0.45); font-size: 11px; pointer-events:none;
+    }
+    .moon {
+      position: fixed; top: 8%; right: 10%;
+      color: #ffeec5; font-size: 32px; line-height: 1;
+      text-shadow: 0 0 16px #ffeec5;
+      animation: drift 60s ease-in-out infinite alternate;
+      pointer-events: none;
+    }
+    @keyframes drift {
+      from { transform: translateY(0); }
+      to   { transform: translateY(20px); }
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">07 · ASCII · cada celda es un carácter · parpadeo cambia el glifo</div>
+  <div class="moon">☾</div>
+  <pre id="sky"></pre>
+
+  <script>
+    const sky = document.getElementById('sky');
+
+    // characters by "brightness"
+    const GLYPHS_DIM = [".", "·", "˙"];
+    const GLYPHS_MID = ["+", "*", "•"];
+    const GLYPHS_BRIGHT = ["✦", "✧", "★", "✶", "✺"];
+
+    let COLS = 0, ROWS = 0;
+    let grid = []; // {ch, hue, alpha, baseA, phase, tier}
+
+    function measure() {
+      // measure character size with a probe
+      const probe = document.createElement('span');
+      probe.textContent = 'M';
+      probe.style.font = '14px ui-monospace, monospace';
+      probe.style.position = 'absolute';
+      probe.style.visibility = 'hidden';
+      document.body.appendChild(probe);
+      const w = probe.getBoundingClientRect().width || 8.4;
+      const h = 14;
+      document.body.removeChild(probe);
+
+      COLS = Math.floor(window.innerWidth / w);
+      ROWS = Math.floor(window.innerHeight / h);
+    }
+
+    function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+    function build() {
+      measure();
+      grid = [];
+      for (let y = 0; y < ROWS; y++) {
+        const row = [];
+        for (let x = 0; x < COLS; x++) {
+          const r = Math.random();
+          let cell;
+          if (r < 0.005) {
+            cell = { ch: rand(GLYPHS_BRIGHT), tier: 3, baseA: 0.9, phase: Math.random()*6.28, color: rand(["#ffe6a8","#cfdcff","#fff","#ffd6c8"]) };
+          } else if (r < 0.025) {
+            cell = { ch: rand(GLYPHS_MID), tier: 2, baseA: 0.75, phase: Math.random()*6.28, color: "#dfe3ff" };
+          } else if (r < 0.10) {
+            cell = { ch: rand(GLYPHS_DIM), tier: 1, baseA: 0.55, phase: Math.random()*6.28, color: "#a8aed0" };
+          } else {
+            cell = { ch: " ", tier: 0, baseA: 0, phase: 0, color: "#000" };
+          }
+          row.push(cell);
+        }
+        grid.push(row);
+      }
+    }
+    build();
+
+    let shootX = -10, shootY = -10, shootActive = false, shootDir = 1;
+    function spawnShooter() {
+      shootActive = true;
+      shootX = Math.floor(Math.random() * COLS * 0.5);
+      shootY = Math.floor(Math.random() * ROWS * 0.3);
+      shootDir = Math.random() < 0.5 ? 1 : -1;
+    }
+    setInterval(spawnShooter, 7000);
+    setTimeout(spawnShooter, 1500);
+
+    function render(t) {
+      // randomly mutate some cells (glyph swap, low rate)
+      for (let i = 0; i < 6; i++) {
+        const y = Math.floor(Math.random() * ROWS);
+        const x = Math.floor(Math.random() * COLS);
+        const c = grid[y]?.[x];
+        if (!c || c.tier === 0) continue;
+        const pool = c.tier === 3 ? GLYPHS_BRIGHT : c.tier === 2 ? GLYPHS_MID : GLYPHS_DIM;
+        c.ch = pool[Math.floor(Math.random() * pool.length)];
+      }
+
+      // shooting star step
+      let shootCells = new Set();
+      if (shootActive) {
+        for (let k = 0; k < 6; k++) {
+          const sx = Math.floor(shootX - k * shootDir);
+          const sy = Math.floor(shootY + k * 0.6);
+          if (sx >= 0 && sx < COLS && sy >= 0 && sy < ROWS) shootCells.add(sy * COLS + sx);
+        }
+        shootX += shootDir * 0.8;
+        shootY += 0.5;
+        if (shootX < -10 || shootX > COLS + 10 || shootY > ROWS + 4) shootActive = false;
+      }
+
+      let html = '';
+      for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+          const c = grid[y][x];
+          if (shootCells.has(y * COLS + x)) {
+            html += '<span style="color:#ffeec5;text-shadow:0 0 6px #ffeec5;">━</span>';
+            continue;
+          }
+          if (c.tier === 0) {
+            html += ' ';
+            continue;
+          }
+          const tw = c.baseA * (0.75 + 0.25 * Math.sin(t * 0.002 + c.phase));
+          if (c.tier === 3) {
+            html += `<span style="color:${c.color};opacity:${tw};text-shadow:0 0 6px ${c.color};">${c.ch}</span>`;
+          } else if (c.tier === 2) {
+            html += `<span style="color:${c.color};opacity:${tw};">${c.ch}</span>`;
+          } else {
+            html += `<span style="color:${c.color};opacity:${tw * 0.8};">${c.ch}</span>`;
+          }
+        }
+        html += '\n';
+      }
+      sky.innerHTML = html;
+      requestAnimationFrame(render);
+    }
+    requestAnimationFrame(render);
+
+    window.addEventListener('resize', () => {
+      build();
+    });
+  </script>
+</body>
+</html>

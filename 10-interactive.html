@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>10 · dibuja tu constelación</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#04050a; color:#fff; }
+    canvas { display:block; width:100vw; height:100vh; cursor:crosshair; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.5);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+      max-width: 60%;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      display: flex; flex-direction: column; gap: 6px;
+      z-index: 10;
+    }
+    .ui button {
+      font-family: inherit; font-size: 11px;
+      background: rgba(0,0,0,0.5); color: rgba(255,255,255,0.8);
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      padding: 6px 10px; cursor: pointer;
+      text-align: left;
+    }
+    .ui button:hover { color:#ffe6a8; border-color: #ffe6a8; }
+    .saved-list {
+      max-height: 200px; overflow-y: auto;
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 4px; padding: 6px;
+      min-width: 180px;
+    }
+    .saved-item {
+      padding: 4px 6px; cursor: pointer;
+      color: rgba(255,255,255,0.7); font-size: 11px;
+      display: flex; justify-content: space-between; gap: 8px;
+    }
+    .saved-item:hover { color: #ffe6a8; background: rgba(255,255,255,0.05); border-radius: 3px; }
+    .saved-item .del { color: rgba(255,80,80,0.7); }
+    .saved-item .del:hover { color: #ff5050; }
+    .empty { color: rgba(255,255,255,0.4); font-style: italic; padding: 4px; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label" id="label">10 · click en estrellas para conectar · doble click para cerrar/guardar · ESC cancela</div>
+  <div class="ui">
+    <button id="save">💾 guardar como…</button>
+    <button id="clear">🗑 limpiar dibujo actual</button>
+    <button id="reseed">↻ nuevo cielo</button>
+    <div class="saved-list" id="savedList"></div>
+  </div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const label = document.getElementById('label');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', () => { resize(); });
+
+    // Stars seeded by Math.random with a stored seed so the sky is stable per session
+    let stars = [];
+    let seed = Number(localStorage.getItem('rs2_seed') || Date.now());
+    localStorage.setItem('rs2_seed', String(seed));
+
+    function mulberry32(a) {
+      return function() {
+        let t = a += 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function buildSky() {
+      const rng = mulberry32(seed);
+      stars = [];
+      const n = Math.floor(W * H / 6000);
+      for (let i = 0; i < n; i++) {
+        stars.push({
+          x: rng() * W,
+          y: rng() * H,
+          r: rng() < 0.06 ? 1.8 + rng() * 1.2 : 0.6 + rng() * 1.0,
+          alpha: 0.4 + rng() * 0.6,
+          phase: rng() * Math.PI * 2,
+          id: i
+        });
+      }
+    }
+    buildSky();
+
+    let inProgress = []; // array of star indices being connected
+    let savedConstellations = JSON.parse(localStorage.getItem('rs2_constellations') || '[]');
+
+    function renderSavedList() {
+      const ul = document.getElementById('savedList');
+      if (savedConstellations.length === 0) {
+        ul.innerHTML = '<div class="empty">aún no has guardado nada</div>';
+        return;
+      }
+      ul.innerHTML = savedConstellations.map((c, i) => `
+        <div class="saved-item" data-i="${i}">
+          <span>✧ ${escapeHtml(c.name)}</span>
+          <span class="del" data-del="${i}">×</span>
+        </div>`).join('');
+      ul.querySelectorAll('.del').forEach(el => {
+        el.addEventListener('click', e => {
+          e.stopPropagation();
+          const i = +el.dataset.del;
+          savedConstellations.splice(i, 1);
+          localStorage.setItem('rs2_constellations', JSON.stringify(savedConstellations));
+          renderSavedList();
+        });
+      });
+    }
+    function escapeHtml(s) {
+      return s.replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+    }
+    renderSavedList();
+
+    function findStarNear(x, y) {
+      let best = -1, bd = 22 * 22;
+      for (let i = 0; i < stars.length; i++) {
+        const dx = stars[i].x - x;
+        const dy = stars[i].y - y;
+        const d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = i; }
+      }
+      return best;
+    }
+
+    let mouseX = -100, mouseY = -100;
+    canvas.addEventListener('mousemove', e => {
+      const r = canvas.getBoundingClientRect();
+      mouseX = e.clientX - r.left;
+      mouseY = e.clientY - r.top;
+    });
+    canvas.addEventListener('click', e => {
+      const r = canvas.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      const idx = findStarNear(x, y);
+      if (idx >= 0 && inProgress[inProgress.length - 1] !== idx) {
+        inProgress.push(idx);
+        label.textContent = `${inProgress.length} estrella(s) conectadas · doble click para guardar · ESC para cancelar`;
+      }
+    });
+    canvas.addEventListener('dblclick', () => {
+      if (inProgress.length >= 2) saveCurrent();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        inProgress = [];
+        label.textContent = '10 · click en estrellas para conectar · doble click para cerrar/guardar · ESC cancela';
+      }
+    });
+
+    function saveCurrent() {
+      const name = prompt('Nombre de tu constelación:', '');
+      if (!name) return;
+      const pts = inProgress.map(i => ({ x: stars[i].x, y: stars[i].y }));
+      savedConstellations.push({ name, pts, seed });
+      localStorage.setItem('rs2_constellations', JSON.stringify(savedConstellations));
+      inProgress = [];
+      renderSavedList();
+      label.textContent = `✓ guardado: ${name}`;
+      setTimeout(() => {
+        label.textContent = '10 · click en estrellas para conectar · doble click para cerrar/guardar · ESC cancela';
+      }, 2500);
+    }
+
+    document.getElementById('save').addEventListener('click', () => {
+      if (inProgress.length >= 2) saveCurrent();
+      else label.textContent = '⚠ conecta al menos 2 estrellas antes';
+    });
+    document.getElementById('clear').addEventListener('click', () => {
+      inProgress = [];
+    });
+    document.getElementById('reseed').addEventListener('click', () => {
+      seed = Date.now();
+      localStorage.setItem('rs2_seed', String(seed));
+      // wipe saved (they reference old positions); confirm
+      if (savedConstellations.length && !confirm('Nuevo cielo borrará tus constelaciones guardadas (referencian estrellas antiguas). ¿Continuar?')) {
+        return;
+      }
+      savedConstellations = [];
+      localStorage.setItem('rs2_constellations', '[]');
+      inProgress = [];
+      buildSky();
+      renderSavedList();
+    });
+
+    const t0 = performance.now();
+    function draw() {
+      const t = (performance.now() - t0) / 1000;
+      ctx.fillStyle = '#04050a';
+      ctx.fillRect(0, 0, W, H);
+
+      // saved constellations
+      for (const c of savedConstellations) {
+        ctx.strokeStyle = 'rgba(180, 200, 255, 0.45)';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        c.pts.forEach((p, i) => {
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        ctx.stroke();
+
+        // label near centroid
+        const cx = c.pts.reduce((s,p) => s + p.x, 0) / c.pts.length;
+        const cy = c.pts.reduce((s,p) => s + p.y, 0) / c.pts.length;
+        ctx.fillStyle = 'rgba(255, 230, 168, 0.6)';
+        ctx.font = '11px ui-monospace, monospace';
+        ctx.fillText(c.name, cx + 8, cy);
+      }
+
+      // current in-progress lines (animated)
+      if (inProgress.length > 0) {
+        const dashOffset = -t * 30;
+        ctx.setLineDash([4, 4]);
+        ctx.lineDashOffset = dashOffset;
+        ctx.strokeStyle = '#ffe6a8';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        inProgress.forEach((idx, i) => {
+          const s = stars[idx];
+          if (i === 0) ctx.moveTo(s.x, s.y);
+          else ctx.lineTo(s.x, s.y);
+        });
+        // line from last star to mouse
+        const last = stars[inProgress[inProgress.length - 1]];
+        ctx.lineTo(mouseX, mouseY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // highlight clicked stars
+        for (const idx of inProgress) {
+          const s = stars[idx];
+          ctx.strokeStyle = '#ffe6a8';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r + 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      // stars
+      const hovered = findStarNear(mouseX, mouseY);
+      for (let i = 0; i < stars.length; i++) {
+        const s = stars[i];
+        const tw = 0.85 + 0.15 * Math.sin(t * 1.1 + s.phase);
+        const a = s.alpha * tw;
+        ctx.fillStyle = `rgba(255,255,255,${a})`;
+        ctx.shadowColor = i === hovered ? '#ffe6a8' : 'rgba(255,255,255,0.7)';
+        ctx.shadowBlur = i === hovered ? 14 : 6 + s.r * 3;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r * (i === hovered ? 1.4 : 1), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>
