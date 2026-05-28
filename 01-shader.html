@@ -48,41 +48,38 @@
       return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
     }
 
-    // stars from a single cell layer
+    // stars from 3x3 neighbour cells so halos don't clip into squares
     vec3 starsLayer(vec2 uv, float scale, float density, float baseSize) {
       vec2 g = uv * scale;
       vec2 cell = floor(g);
       vec2 f = fract(g);
 
       vec3 col = vec3(0.0);
-      // check this cell only (cheap)
-      float skip = step(density, hash12(cell));
-      if (skip > 0.5) return col;
+      for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+          vec2 c = cell + vec2(float(dx), float(dy));
+          if (hash12(c) > density) continue;
+          vec2 r = hash22(c) * 0.5 + 0.5;
+          vec2 d = f - vec2(float(dx), float(dy)) - r;
+          float dist = length(d);
+          if (dist > 1.5) continue;
+          float sz = baseSize * (0.4 + hash12(c + 17.3) * 0.9);
 
-      // random offset inside cell
-      vec2 r = hash22(cell) * 0.5 + 0.5;
-      vec2 d = f - r;
-      float dist = length(d);
+          float temp = hash12(c + 51.2);
+          vec3 cold = vec3(0.55, 0.7, 1.0);
+          vec3 warm = vec3(1.0, 0.78, 0.55);
+          vec3 white = vec3(1.0);
+          vec3 starCol = mix(warm, white, smoothstep(0.0, 0.5, temp));
+          starCol = mix(starCol, cold, smoothstep(0.5, 1.0, temp));
 
-      // size from random
-      float sz = baseSize * (0.4 + hash12(cell + 17.3) * 0.9);
+          float ph = hash12(c + 91.1) * 6.2831;
+          float tw = 0.75 + 0.25 * sin(uTime * 1.3 + ph);
 
-      // temperature → color (cool red ←→ blue)
-      float temp = hash12(cell + 51.2);
-      vec3 cold = vec3(0.55, 0.7, 1.0);
-      vec3 warm = vec3(1.0, 0.78, 0.55);
-      vec3 white = vec3(1.0);
-      vec3 starCol = mix(warm, white, smoothstep(0.0, 0.5, temp));
-      starCol = mix(starCol, cold, smoothstep(0.5, 1.0, temp));
-
-      // twinkle phase per-cell
-      float ph = hash12(cell + 91.1) * 6.2831;
-      float tw = 0.75 + 0.25 * sin(uTime * 1.3 + ph);
-
-      // core + halo
-      float core = exp(-dist * dist / (sz * sz * 0.7)) * tw;
-      float halo = exp(-dist / (sz * 2.5)) * 0.4 * tw;
-      col += starCol * (core * 1.4 + halo);
+          float core = exp(-dist * dist / (sz * sz * 0.7)) * tw;
+          float halo = exp(-dist / (sz * 2.5)) * 0.4 * tw;
+          col += starCol * (core * 1.4 + halo);
+        }
+      }
       return col;
     }
 
