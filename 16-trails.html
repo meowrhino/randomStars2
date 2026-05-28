@@ -48,7 +48,7 @@
   <div class="label">16 · long exposure · cielo rota alrededor del polo celeste · acumulación tipo astrofoto</div>
   <div class="ui">
     <label>velocidad <input type="range" id="speed" min="0" max="100" value="40"></label>
-    <label>fade <input type="range" id="fade" min="0" max="20" value="2"></label>
+    <label>fade <input type="range" id="fade" min="0" max="20" value="0"></label>
     <button id="clear">limpiar exposición</button>
     <button id="repole">reposicionar polo</button>
   </div>
@@ -77,22 +77,24 @@
     let stars = [];
     function build() {
       stars = [];
-      // density: ~ 1 per 800px²
-      const n = Math.floor(W * H / 800);
+      // density: ~ 1 per 1200px²
+      const n = Math.floor(W * H / 1200);
       for (let i = 0; i < n; i++) {
         const u = Math.random();
         // Pareto magnitudes
         const mag = 6.5 - Math.pow(u, 4) * 6.5;
         const flux = Math.pow(10, -0.4 * (mag - 5));
-        // initial angle from pole, plus radius
         const px = Math.random() * W;
         const py = Math.random() * H;
         const dx = px - poleX, dy = py - poleY;
         const r = Math.hypot(dx, dy);
         const ang = Math.atan2(dy, dx);
+        // initial position to track for continuous lineTo
         stars.push({
           r, ang, flux, mag,
-          color: pickColor()
+          color: pickColor(),
+          prevX: poleX + Math.cos(ang) * r,
+          prevY: poleY + Math.sin(ang) * r
         });
       }
     }
@@ -111,8 +113,9 @@
       ctx.fillRect(0, 0, W, H);
     });
     document.getElementById('repole').addEventListener('click', () => {
-      poleX = Math.random() * W;
-      poleY = Math.random() * H * 0.5;
+      // pole can be inside or just outside frame for variety
+      poleX = (Math.random() - 0.3) * W * 1.3;
+      poleY = (Math.random() - 0.3) * H * 0.9;
       build();
       ctx.fillStyle = '#01030a';
       ctx.fillRect(0, 0, W, H);
@@ -142,20 +145,35 @@
         ctx.fillRect(0, 0, W, H);
       }
 
+      // draw each star as a LINE from previous frame's position to current
       ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
       for (const s of stars) {
-        s.ang += speed * dt * 60; // angular velocity around pole
+        s.ang += speed * dt * 60;
         const x = poleX + Math.cos(s.ang) * s.r;
         const y = poleY + Math.sin(s.ang) * s.r;
         const [cr, cg, cb] = s.color;
 
-        // brighter stars draw a fatter, more visible trail
-        const sz = 0.3 + Math.pow(s.flux, 0.45) * 0.6;
-        const a = Math.min(1, s.flux * 0.15);
-        ctx.fillStyle = `rgba(${cr},${cg},${cb},${a})`;
+        const sz = 0.4 + Math.pow(s.flux, 0.5) * 0.9;
+        const a = Math.min(1, s.flux * 0.2);
+
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},${a})`;
+        ctx.lineWidth = sz;
         ctx.beginPath();
-        ctx.arc(x, y, sz, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(s.prevX, s.prevY);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+
+        // bright stars also glow with a rounded cap
+        if (s.flux > 1.5) {
+          ctx.fillStyle = `rgba(${cr},${cg},${cb},${Math.min(1, s.flux * 0.08)})`;
+          ctx.beginPath();
+          ctx.arc(x, y, sz * 1.3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        s.prevX = x;
+        s.prevY = y;
       }
       ctx.globalCompositeOperation = 'source-over';
 

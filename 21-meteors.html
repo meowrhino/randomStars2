@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>21 · Lluvia de meteoros</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; cursor: crosshair; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.55);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 6px; z-index: 10;
+    }
+    .ui label { display: flex; justify-content: space-between; gap: 12px; align-items:center; }
+    .ui input[type=range] { width: 110px; }
+    .ui button {
+      background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.8);
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      padding: 4px 8px; cursor: pointer; font-family: inherit; font-size: 11px;
+    }
+    .ui button:hover { color:#ffe6a8; border-color:#ffe6a8; }
+    .counter {
+      position: fixed; bottom: 16px; right: 16px;
+      color: rgba(255, 230, 168, 0.7);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 4px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">21 · radiante + meteoros con persistent trains · click para forzar meteoro · bursts ocasionales</div>
+  <div class="ui">
+    <label>tasa <input type="range" id="rate" min="1" max="100" value="40"></label>
+    <label>radiante visible <input type="checkbox" id="showRad"></label>
+    <button id="burst">💥 burst</button>
+    <button id="repos">⟳ mover radiante</button>
+  </div>
+  <div class="counter" id="counter">meteoros: 0</div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+
+    // Radiant point — meteors emanate FROM here (perspective effect of comet debris)
+    let radX = W * 0.25, radY = H * 0.2;
+
+    let stars = [];
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.50) return [255, 250, 230];
+      if (r < 0.85) return [255, 225, 190];
+      return [255, 195, 160];
+    }
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * H / 700);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          mag, flux,
+          color: pickColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.4 + Math.random() * 1.4
+        });
+      }
+    }
+    buildStars();
+
+    // ── meteors ──
+    // Each meteor has:
+    //   x, y: current head position
+    //   vx, vy: velocity (radially away from radiant)
+    //   life: 0..1 (1 = just born)
+    //   maxLife: seconds
+    //   length: trail length in seconds
+    //   color, brightness, train: persistent trail samples
+    const meteors = [];
+    let totalCount = 0;
+    let lastSpawn = 0;
+
+    function spawnMeteor(forced = false) {
+      const ang = Math.random() * Math.PI * 2;
+      // distance from radiant: pick range so meteor crosses screen
+      const startDist = 30 + Math.random() * 80;
+      const x = radX + Math.cos(ang) * startDist;
+      const y = radY + Math.sin(ang) * startDist;
+      // velocity radial outward (faster than 30 px/sec)
+      const sp = 300 + Math.random() * 500;
+      const vx = Math.cos(ang) * sp;
+      const vy = Math.sin(ang) * sp;
+      // brightness — sporadic super bright "fireballs"
+      const isFireball = Math.random() < 0.08 || forced;
+      const brightness = isFireball ? 3 + Math.random() * 4 : 0.5 + Math.random() * 1.5;
+      const colorTemp = Math.random();
+      const color = isFireball
+        ? [255, 240 - Math.random() * 80, 180 - Math.random() * 80]  // yellow/orange fireball
+        : colorTemp < 0.3 ? [200, 220, 255]   // blue (fast = high-velocity oxygen)
+        : colorTemp < 0.7 ? [255, 245, 220]   // white-yellow
+        : [255, 200, 140];                    // orange-red
+      meteors.push({
+        x, y, vx, vy,
+        born: performance.now(),
+        maxLife: 1.0 + Math.random() * 2.0,
+        trailDuration: 0.4 + Math.random() * 1.0,
+        brightness,
+        color,
+        isFireball,
+        // train: array of {x, y, born}
+        train: [{ x, y, born: performance.now() }]
+      });
+      totalCount++;
+    }
+
+    canvas.addEventListener('click', e => {
+      const r = canvas.getBoundingClientRect();
+      // override radiant temporarily so the spawned meteor comes from there
+      const savedX = radX, savedY = radY;
+      radX = e.clientX - r.left; radY = e.clientY - r.top;
+      spawnMeteor(true);
+      radX = savedX; radY = savedY;
+    });
+
+    document.getElementById('burst').addEventListener('click', () => {
+      for (let i = 0; i < 12; i++) {
+        setTimeout(spawnMeteor, i * 80);
+      }
+    });
+    document.getElementById('repos').addEventListener('click', () => {
+      radX = W * (0.15 + Math.random() * 0.7);
+      radY = H * (0.10 + Math.random() * 0.5);
+    });
+
+    let prevT = performance.now();
+    function frame() {
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - prevT) / 1000);
+      prevT = now;
+      const t = now / 1000;
+
+      // fade background (cheap motion blur for meteor heads)
+      ctx.fillStyle = 'rgba(2, 3, 10, 0.30)';
+      ctx.fillRect(0, 0, W, H);
+
+      // ── stars ──
+      ctx.globalCompositeOperation = 'lighter';
+      stars.sort((a, b) => a.flux - b.flux);
+      for (const s of stars) {
+        const tw = 0.8 + 0.2 * Math.sin(t * s.twSpeed + s.phase);
+        const f = s.flux * tw;
+        const [r, g, b] = s.color;
+        const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
+        const haloR = coreR * 2 + Math.pow(f, 0.5) * 4;
+        if (f > 3) {
+          const len = Math.min(40, 5 + f * 3);
+          const aS = Math.min(0.4, f * 0.04);
+          const gH = ctx.createLinearGradient(s.x - len, s.y, s.x + len, s.y);
+          gH.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gH.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gH.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          ctx.fillStyle = gH; ctx.fillRect(s.x - len, s.y - 0.5, len * 2, 1);
+          const gV = ctx.createLinearGradient(s.x, s.y - len, s.x, s.y + len);
+          gV.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gV.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gV.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          ctx.fillStyle = gV; ctx.fillRect(s.x - 0.5, s.y - len, 1, len * 2);
+        }
+        const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+        halo.addColorStop(0, `rgba(${r|0},${g|0},${b|0},${Math.min(0.35, f * 0.04)})`);
+        halo.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+        ctx.fillStyle = halo;
+        ctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+        ctx.fillStyle = f > 2
+          ? `rgba(255,255,255,${Math.min(1, f * 0.15)})`
+          : `rgba(${r|0},${g|0},${b|0},${Math.min(1, f * 0.7)})`;
+        ctx.beginPath(); ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // ── meteors ──
+      const rate = parseFloat(document.getElementById('rate').value);
+      // mean inter-arrival time = 1/rate seconds
+      if (now - lastSpawn > (1000 / rate) * (0.5 + Math.random())) {
+        spawnMeteor();
+        lastSpawn = now;
+      }
+
+      const alive = [];
+      for (const m of meteors) {
+        const age = (now - m.born) / 1000;
+        if (age > m.maxLife + m.trailDuration) continue;
+
+        // advance head only while alive
+        if (age < m.maxLife) {
+          m.x += m.vx * dt;
+          m.y += m.vy * dt;
+          m.train.push({ x: m.x, y: m.y, born: now });
+        }
+        // prune old train points
+        m.train = m.train.filter(p => (now - p.born) / 1000 < m.trailDuration);
+
+        // off-screen meteors expire faster
+        if (m.x < -100 || m.x > W + 100 || m.y < -100 || m.y > H + 100) {
+          if (age > 0.3) continue;
+        }
+
+        // draw train as gradient polyline
+        if (m.train.length >= 2) {
+          const [cr, cg, cb] = m.color;
+          for (let i = 1; i < m.train.length; i++) {
+            const p0 = m.train[i - 1];
+            const p1 = m.train[i];
+            const trailAge = (now - p1.born) / 1000;
+            const a = (1 - trailAge / m.trailDuration) * m.brightness * 0.3;
+            if (a <= 0) continue;
+            ctx.strokeStyle = `rgba(${cr},${cg},${cb},${a})`;
+            ctx.lineWidth = (1 - trailAge / m.trailDuration) * (m.isFireball ? 3.5 : 1.6);
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.stroke();
+          }
+        }
+
+        // head burst (only while alive)
+        if (age < m.maxLife) {
+          const headR = m.isFireball ? 4 + Math.random() * 1.5 : 1.5 + m.brightness * 0.5;
+          const hGrad = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, headR * 6);
+          hGrad.addColorStop(0, `rgba(255, 255, 255, ${m.brightness * 0.7})`);
+          hGrad.addColorStop(0.2, `rgba(${m.color[0]},${m.color[1]},${m.color[2]},${m.brightness * 0.4})`);
+          hGrad.addColorStop(1, `rgba(${m.color[0]},${m.color[1]},${m.color[2]},0)`);
+          ctx.fillStyle = hGrad;
+          ctx.fillRect(m.x - headR * 6, m.y - headR * 6, headR * 12, headR * 12);
+          ctx.fillStyle = '#fff';
+          ctx.beginPath(); ctx.arc(m.x, m.y, headR, 0, Math.PI * 2); ctx.fill();
+        }
+        alive.push(m);
+      }
+      meteors.length = 0;
+      meteors.push(...alive);
+
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ── radiant indicator ──
+      if (document.getElementById('showRad').checked) {
+        ctx.strokeStyle = 'rgba(255, 230, 168, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 5]);
+        ctx.beginPath(); ctx.arc(radX, radY, 18, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(radX, radY, 38, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(255, 230, 168, 0.6)';
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.fillText('RADIANTE', radX + 12, radY - 24);
+      }
+
+      document.getElementById('counter').textContent = `meteoros: ${totalCount} · activos: ${meteors.length}`;
+
+      requestAnimationFrame(frame);
+    }
+    frame();
+
+    window.addEventListener('resize', () => {
+      resize();
+      buildStars();
+      radX = W * 0.25; radY = H * 0.2;
+    });
+  </script>
+</body>
+</html>

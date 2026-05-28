@@ -22,11 +22,20 @@
       font-family: ui-monospace, monospace; font-size: 11px;
       pointer-events: none;
     }
+    .btn {
+      position: fixed; top: 16px; right: 16px;
+      color: rgba(255,255,255,0.75); cursor: pointer;
+      font-family: ui-monospace, monospace; font-size: 12px;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+      background: rgba(0,0,0,0.4); user-select: none; z-index: 10;
+    }
+    .btn:hover { color:#ffe6a8; border-color:#ffe6a8; }
   </style>
 </head>
 <body>
   <a class="back" href="index.html">← back</a>
-  <div class="label">18 · cinematic · GLSL · HDR bloom + chromatic aberration + lens dust + grain · DSLR look</div>
+  <div class="btn" id="regen">↻ nuevo cielo</div>
+  <div class="label">18 · cinematic · GLSL · HDR bloom + chromatic aberration + lens dust + grain · DSLR · cada vez distinto</div>
   <canvas id="c"></canvas>
 
   <script id="vs" type="x-shader/x-vertex">
@@ -37,10 +46,11 @@
     precision highp float;
     uniform vec2 uRes;
     uniform float uTime;
+    uniform vec2 uSeed;
 
-    // ── hash & noise ────────────────────────────────────────
-    float hash12(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    vec2  hash22(vec2 p) { p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3))); return fract(sin(p) * 43758.5453); }
+    // ── hash & noise (seeded) ──────────────────────────────
+    float hash12(vec2 p) { p += uSeed; return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    vec2  hash22(vec2 p) { p += uSeed; p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3))); return fract(sin(p) * 43758.5453); }
     float vnoise(vec2 p) {
       vec2 i = floor(p), f = fract(p);
       float a = hash12(i), b = hash12(i + vec2(1,0));
@@ -229,11 +239,20 @@
 
     const uRes = gl.getUniformLocation(prog, 'uRes');
     const uTime = gl.getUniformLocation(prog, 'uTime');
+    const uSeed = gl.getUniformLocation(prog, 'uSeed');
+
+    let seedX = Math.random() * 10000;
+    let seedY = Math.random() * 10000;
+    document.getElementById('regen').addEventListener('click', () => {
+      seedX = Math.random() * 10000;
+      seedY = Math.random() * 10000;
+    });
 
     const t0 = performance.now();
     function frame() {
       gl.uniform2f(uRes, canvas.width, canvas.height);
       gl.uniform1f(uTime, (performance.now() - t0) / 1000);
+      gl.uniform2f(uSeed, seedX, seedY);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       requestAnimationFrame(frame);
     }

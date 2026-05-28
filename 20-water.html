@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>20 · Reflejo en agua</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; cursor: crosshair; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.55);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+    .btn {
+      position: fixed; top: 16px; right: 16px;
+      color: rgba(255,255,255,0.75); cursor: pointer;
+      font-family: ui-monospace, monospace; font-size: 12px;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+      background: rgba(0,0,0,0.4); user-select: none; z-index: 10;
+    }
+    .btn:hover { color:#a8c8ff; border-color:#a8c8ff; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="btn" id="regen">↻ nuevo lago</div>
+  <div class="label">20 · cielo + reflejo en lago · click para crear ondas · ripples deforman las estrellas reflejadas</div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H, HORIZON;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+      HORIZON = H * 0.5;
+    }
+    resize();
+
+    // ── pre-render sky to offscreen for fast reflection sampling ──
+    const skyCanvas = document.createElement('canvas');
+    const sctx = skyCanvas.getContext('2d');
+
+    let stars = [];
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.50) return [255, 250, 230];
+      if (r < 0.85) return [255, 225, 190];
+      return [255, 195, 160];
+    }
+    function buildStars() {
+      stars = [];
+      const n = Math.floor(W * (HORIZON) / 600);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * HORIZON,
+          mag, flux,
+          color: pickColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.5 + Math.random() * 1.4
+        });
+      }
+    }
+    buildStars();
+
+    // crescent moon parameters (random per regen)
+    let moon = null;
+    function buildMoon() {
+      moon = {
+        x: W * (0.2 + Math.random() * 0.6),
+        y: HORIZON * (0.15 + Math.random() * 0.4),
+        r: 18 + Math.random() * 16,
+        phase: -0.4 + Math.random() * 0.8 // -1..1 (offset of shadow circle)
+      };
+    }
+    buildMoon();
+
+    function renderSky(t) {
+      skyCanvas.width = W;
+      skyCanvas.height = HORIZON;
+
+      // sky gradient
+      const sky = sctx.createLinearGradient(0, 0, 0, HORIZON);
+      sky.addColorStop(0, '#04060f');
+      sky.addColorStop(0.7, '#080a18');
+      sky.addColorStop(1, '#0c0e22');
+      sctx.fillStyle = sky;
+      sctx.fillRect(0, 0, W, HORIZON);
+
+      // moon
+      const m = moon;
+      // halo
+      const halo = sctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.r * 5);
+      halo.addColorStop(0, 'rgba(255, 245, 220, 0.35)');
+      halo.addColorStop(0.4, 'rgba(255, 230, 190, 0.1)');
+      halo.addColorStop(1, 'rgba(255, 230, 190, 0)');
+      sctx.fillStyle = halo;
+      sctx.fillRect(m.x - m.r * 5, m.y - m.r * 5, m.r * 10, m.r * 10);
+      // disk
+      sctx.fillStyle = '#fff5d8';
+      sctx.beginPath(); sctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); sctx.fill();
+      // phase shadow
+      sctx.save();
+      sctx.beginPath(); sctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); sctx.clip();
+      sctx.fillStyle = '#06080f';
+      sctx.beginPath();
+      sctx.arc(m.x + m.phase * m.r * 1.8, m.y, m.r * 1.05, 0, Math.PI * 2);
+      sctx.fill();
+      sctx.restore();
+
+      // stars
+      sctx.globalCompositeOperation = 'lighter';
+      stars.sort((a, b) => a.flux - b.flux);
+      for (const s of stars) {
+        const tw = 0.8 + 0.2 * Math.sin(t * s.twSpeed + s.phase);
+        const f = s.flux * tw;
+        const [r, g, b] = s.color;
+        const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
+        const haloR = coreR * 2 + Math.pow(f, 0.5) * 4;
+
+        if (f > 4) {
+          const len = Math.min(40, 5 + f * 3);
+          const aS = Math.min(0.5, f * 0.04);
+          const gH = sctx.createLinearGradient(s.x - len, s.y, s.x + len, s.y);
+          gH.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gH.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gH.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          sctx.fillStyle = gH; sctx.fillRect(s.x - len, s.y - 0.5, len * 2, 1);
+          const gV = sctx.createLinearGradient(s.x, s.y - len, s.x, s.y + len);
+          gV.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+          gV.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${aS * tw})`);
+          gV.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+          sctx.fillStyle = gV; sctx.fillRect(s.x - 0.5, s.y - len, 1, len * 2);
+        }
+
+        const halo2 = sctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+        const ha = Math.min(0.4, f * 0.05);
+        halo2.addColorStop(0, `rgba(${r|0},${g|0},${b|0},${ha})`);
+        halo2.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+        sctx.fillStyle = halo2;
+        sctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+
+        sctx.fillStyle = f > 2
+          ? `rgba(255,255,255,${Math.min(1, f * 0.15)})`
+          : `rgba(${r|0},${g|0},${b|0},${Math.min(1, f * 0.7)})`;
+        sctx.beginPath(); sctx.arc(s.x, s.y, coreR, 0, Math.PI * 2); sctx.fill();
+      }
+      sctx.globalCompositeOperation = 'source-over';
+    }
+
+    // ripples (click adds one)
+    const ripples = [];
+    canvas.addEventListener('click', e => {
+      const r = canvas.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      if (y > HORIZON) {
+        ripples.push({ x, y, r0: 0, born: performance.now(), strength: 18 });
+        if (ripples.length > 12) ripples.shift();
+      }
+    });
+
+    document.getElementById('regen').addEventListener('click', () => {
+      buildStars();
+      buildMoon();
+      ripples.length = 0;
+    });
+
+    function noise2(x, y) {
+      // cheap pseudo-noise
+      return Math.sin(x * 12.9898 + y * 78.233) * 43758.5453 % 1;
+    }
+
+    function renderWater(t) {
+      const Hwater = H - HORIZON;
+      // grab a downscaled imageData of sky for sampling (for perf, do row-by-row instead)
+      // simpler approach: draw the sky flipped + apply per-row sinusoidal x distortion
+      // sample sky at flipped y with x perturbation
+      const skyImg = sctx.getImageData(0, 0, W, HORIZON);
+      const waterImg = ctx.createImageData(W, Hwater);
+
+      const now = performance.now();
+      // pre-compute ripple state
+      const liveRipples = [];
+      for (const rp of ripples) {
+        const age = (now - rp.born) / 1000;
+        if (age < 4.5) {
+          rp.r0 = age * 120; // expansion speed
+          rp.alpha = Math.max(0, 1 - age / 4.5);
+          liveRipples.push(rp);
+        }
+      }
+      // mutate ripples list in place: keep only live ones
+      ripples.length = 0;
+      ripples.push(...liveRipples);
+
+      for (let y = 0; y < Hwater; y++) {
+        // depth-aware distortion: more amplitude near horizon (further reflection),
+        // ALSO more horizontal "compression" near horizon
+        const yWater = y;
+        const depthFactor = 1 - y / Hwater; // 1 at horizon, 0 at bottom
+        // base horizontal sinusoidal wave
+        const wave = Math.sin(yWater * 0.3 + t * 1.5) * 1.5 * (1 - depthFactor * 0.5)
+                   + Math.sin(yWater * 0.07 - t * 0.8) * 3 * (1 - depthFactor * 0.5);
+        // vertical reflection: sky pixel at y_sky = HORIZON - 1 - y * compressY
+        const compressY = 1 - depthFactor * 0.0; // (keep linear for now)
+        const ySkyIdx = Math.floor((1 - y / Hwater) * (HORIZON - 1)); // simple inverted mapping
+        // for darker, compressed reflection: pull mainly from upper sky
+        const ySky = Math.min(HORIZON - 1, Math.max(0, ySkyIdx));
+
+        for (let x = 0; x < W; x++) {
+          // ripple contribution at (x, y) — sum from each live ripple
+          let dxR = 0;
+          for (const rp of liveRipples) {
+            const dx0 = x - rp.x;
+            const dy0 = (HORIZON + y) - rp.y;
+            const dist = Math.sqrt(dx0 * dx0 + dy0 * dy0);
+            const front = rp.r0;
+            const localR = dist - front;
+            if (Math.abs(localR) < 60) {
+              const env = Math.exp(-localR * localR * 0.002) * Math.exp(-front * 0.005);
+              dxR += Math.sin(localR * 0.25) * env * rp.strength * rp.alpha;
+            }
+          }
+
+          const xSrc = Math.max(0, Math.min(W - 1, Math.floor(x + wave + dxR)));
+          const ySrcSky = ySky;
+          const srcIdx = (ySrcSky * W + xSrc) * 4;
+          const dstIdx = (y * W + x) * 4;
+          // attenuate by depth (deeper = darker, more water color)
+          const r0 = skyImg.data[srcIdx];
+          const g0 = skyImg.data[srcIdx + 1];
+          const b0 = skyImg.data[srcIdx + 2];
+          // water tint: deep blue base
+          const tintR = 4, tintG = 8, tintB = 18;
+          const mixK = 0.55 + (1 - depthFactor) * 0.25;
+          waterImg.data[dstIdx]     = r0 * (1 - mixK) + tintR * mixK;
+          waterImg.data[dstIdx + 1] = g0 * (1 - mixK) + tintG * mixK;
+          waterImg.data[dstIdx + 2] = b0 * (1 - mixK) + tintB * mixK;
+          waterImg.data[dstIdx + 3] = 255;
+        }
+      }
+      ctx.putImageData(waterImg, 0, HORIZON);
+    }
+
+    let lastSkyT = 0;
+    function frame() {
+      const t = performance.now() / 1000;
+
+      // re-render sky once per ~80ms (twinkle still smooth enough)
+      if (t - lastSkyT > 0.08) {
+        renderSky(t);
+        lastSkyT = t;
+      }
+
+      // blit sky to main canvas
+      ctx.drawImage(skyCanvas, 0, 0);
+
+      // water
+      renderWater(t);
+
+      // horizon line glow
+      const lineGrad = ctx.createLinearGradient(0, HORIZON - 2, 0, HORIZON + 2);
+      lineGrad.addColorStop(0, 'rgba(0,0,0,0)');
+      lineGrad.addColorStop(0.5, 'rgba(0,0,0,0.6)');
+      lineGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = lineGrad;
+      ctx.fillRect(0, HORIZON - 2, W, 4);
+
+      requestAnimationFrame(frame);
+    }
+    frame();
+
+    window.addEventListener('resize', () => {
+      resize();
+      buildStars();
+      buildMoon();
+    });
+  </script>
+</body>
+</html>
