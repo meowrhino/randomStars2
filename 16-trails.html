@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>16 · Star trails (long exposure)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; position:absolute; top:0; left:0; }
+    #c { z-index: 1; }
+    #grain { z-index: 2; pointer-events: none; opacity: 0.05; mix-blend-mode: screen; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.45);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none; z-index: 10;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.7);
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 4px;
+      z-index: 10;
+    }
+    .ui label { display: flex; justify-content: space-between; gap: 12px; align-items:center; }
+    .ui input[type=range] { width: 110px; }
+    .ui button {
+      background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.8);
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      padding: 4px 8px; cursor: pointer; font-family: inherit; font-size: 11px;
+    }
+    .ui button:hover { color:#ffe6a8; border-color:#ffe6a8; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">16 · long exposure · cielo rota alrededor del polo celeste · acumulación tipo astrofoto</div>
+  <div class="ui">
+    <label>velocidad <input type="range" id="speed" min="0" max="100" value="40"></label>
+    <label>fade <input type="range" id="fade" min="0" max="20" value="2"></label>
+    <button id="clear">limpiar exposición</button>
+    <button id="repole">reposicionar polo</button>
+  </div>
+  <canvas id="c"></canvas>
+  <canvas id="grain"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const grainCanvas = document.getElementById('grain');
+    const gctx = grainCanvas.getContext('2d');
+    let W, H, poleX, poleY;
+
+    function resize() {
+      W = canvas.width = grainCanvas.width = window.innerWidth;
+      H = canvas.height = grainCanvas.height = window.innerHeight;
+      // initial pole position (Polaris): upper-right area
+      poleX = W * 0.78;
+      poleY = H * 0.18;
+      // clear with deep blue base
+      ctx.fillStyle = '#01030a';
+      ctx.fillRect(0, 0, W, H);
+    }
+    resize();
+
+    let stars = [];
+    function build() {
+      stars = [];
+      // density: ~ 1 per 800px²
+      const n = Math.floor(W * H / 800);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        // Pareto magnitudes
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        // initial angle from pole, plus radius
+        const px = Math.random() * W;
+        const py = Math.random() * H;
+        const dx = px - poleX, dy = py - poleY;
+        const r = Math.hypot(dx, dy);
+        const ang = Math.atan2(dy, dx);
+        stars.push({
+          r, ang, flux, mag,
+          color: pickColor()
+        });
+      }
+    }
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.50) return [255, 248, 230];
+      if (r < 0.85) return [255, 222, 185];
+      return [255, 185, 155];
+    }
+    build();
+
+    document.getElementById('clear').addEventListener('click', () => {
+      ctx.fillStyle = '#01030a';
+      ctx.fillRect(0, 0, W, H);
+    });
+    document.getElementById('repole').addEventListener('click', () => {
+      poleX = Math.random() * W;
+      poleY = Math.random() * H * 0.5;
+      build();
+      ctx.fillStyle = '#01030a';
+      ctx.fillRect(0, 0, W, H);
+    });
+
+    function regenerateGrain() {
+      const img = gctx.createImageData(W, H);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const v = Math.random() * 30;
+        img.data[i] = img.data[i+1] = img.data[i+2] = v;
+        img.data[i+3] = 255;
+      }
+      gctx.putImageData(img, 0, 0);
+    }
+    regenerateGrain();
+    setInterval(regenerateGrain, 120);
+
+    let t0 = performance.now();
+    function draw() {
+      const dt = 0.016;
+      const speed = parseFloat(document.getElementById('speed').value) * 0.0002;
+      const fadeAmt = parseFloat(document.getElementById('fade').value);
+
+      // very gentle fade to simulate sensor not building up forever
+      if (fadeAmt > 0) {
+        ctx.fillStyle = `rgba(1, 3, 10, ${fadeAmt * 0.003})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      ctx.globalCompositeOperation = 'lighter';
+      for (const s of stars) {
+        s.ang += speed * dt * 60; // angular velocity around pole
+        const x = poleX + Math.cos(s.ang) * s.r;
+        const y = poleY + Math.sin(s.ang) * s.r;
+        const [cr, cg, cb] = s.color;
+
+        // brighter stars draw a fatter, more visible trail
+        const sz = 0.3 + Math.pow(s.flux, 0.45) * 0.6;
+        const a = Math.min(1, s.flux * 0.15);
+        ctx.fillStyle = `rgba(${cr},${cg},${cb},${a})`;
+        ctx.beginPath();
+        ctx.arc(x, y, sz, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    window.addEventListener('resize', () => {
+      resize(); build();
+    });
+  </script>
+</body>
+</html>

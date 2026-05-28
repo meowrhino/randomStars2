@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>15 · Astrofoto · spikes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.6);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.45);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">15 · magnitudes Pareto · spikes de difracción 4-puntas + Airy halo · PSF realista</div>
+  <canvas id="c"></canvas>
+
+  <script>
+    // Real night-sky look: most stars are mag 5-6 (just barely visible), very few are mag 0-1 (super bright).
+    // Brightness in linear flux follows 10^(-0.4 * mag). Apparent size grows non-linearly.
+    // Brightest stars get diffraction spikes (4-point cross — like a Newtonian telescope or stopped-down lens).
+
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+
+    let stars = [];
+
+    function paretoMag() {
+      // distribution: most around mag 4-6, tail toward 0 (super bright)
+      // Use inverse cdf trick: mag = 6 - (-ln(1-u))^k * 6
+      const u = Math.random();
+      // log distribution: u=0.9 → very bright
+      const m = 6.5 - Math.pow(u, 4) * 6.5;
+      return Math.max(-1.5, Math.min(7, m));
+    }
+
+    function tempColor() {
+      // realistic spectral distribution: most are G/K (white-yellow-orange), few are O/B (blue) or M (red)
+      const r = Math.random();
+      if (r < 0.02) return [165, 195, 255]; // O/B hot blue
+      if (r < 0.10) return [205, 220, 255]; // A blue-white
+      if (r < 0.25) return [255, 250, 240]; // F white
+      if (r < 0.55) return [255, 245, 220]; // G yellow-white (Sun)
+      if (r < 0.85) return [255, 220, 180]; // K orange
+      return [255, 190, 155];                // M red-orange
+    }
+
+    function build() {
+      stars = [];
+      // density: ~1 star per 300 px²  — high
+      const n = Math.floor(W * H / 300);
+      for (let i = 0; i < n; i++) {
+        const mag = paretoMag();
+        // flux ∝ 10^(-0.4 mag), normalised so mag 6 = 1
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        // pos with mild cluster bias (two extra fbm-ish hot spots)
+        let x = Math.random() * W;
+        let y = Math.random() * H;
+        // bias 30% of stars toward two "clusters" (mimics Milky Way pockets)
+        if (Math.random() < 0.3) {
+          const cx = i < n / 2 ? W * 0.3 : W * 0.75;
+          const cy = i < n / 2 ? H * 0.4 : H * 0.65;
+          x = cx + (Math.random() - 0.5) * W * 0.5;
+          y = cy + (Math.random() - 0.5) * H * 0.5;
+          if (x < 0 || x > W || y < 0 || y > H) {
+            x = Math.random() * W; y = Math.random() * H;
+          }
+        }
+        stars.push({
+          x, y, mag, flux,
+          color: tempColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.5 + Math.random() * 1.5
+        });
+      }
+    }
+    build();
+
+    // Draw a 4-point diffraction spike + airy halo PSF
+    function drawSpikedStar(s, t) {
+      const [r, g, b] = s.color;
+      // brightness 0..something. flux is unbounded; cap visually
+      const f = Math.min(s.flux, 18);
+
+      // core radius from flux
+      const coreR = 0.4 + Math.pow(f, 0.4) * 0.8;
+      // halo radius
+      const haloR = coreR * 3 + Math.pow(f, 0.5) * 8;
+      // twinkle (only bright-ish stars twinkle visibly)
+      const tw = 0.85 + 0.15 * Math.sin(t * s.twSpeed + s.phase);
+
+      // additive blend
+      ctx.globalCompositeOperation = 'lighter';
+
+      // Spikes only on top ~1% — like real lenses do
+      if (f > 4) {
+        const spikeLen = Math.min(80, 5 + f * 5);
+        const spikeAlpha = Math.min(0.7, f * 0.04);
+        // gradient line for horizontal & vertical
+        const grad = ctx.createLinearGradient(s.x - spikeLen, s.y, s.x + spikeLen, s.y);
+        grad.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+        grad.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${spikeAlpha * tw})`);
+        grad.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(s.x - spikeLen, s.y - 0.5, spikeLen * 2, 1);
+
+        const grad2 = ctx.createLinearGradient(s.x, s.y - spikeLen, s.x, s.y + spikeLen);
+        grad2.addColorStop(0, `rgba(${r|0},${g|0},${b|0},0)`);
+        grad2.addColorStop(0.5, `rgba(${r|0},${g|0},${b|0},${spikeAlpha * tw})`);
+        grad2.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+        ctx.fillStyle = grad2;
+        ctx.fillRect(s.x - 0.5, s.y - spikeLen, 1, spikeLen * 2);
+
+        // soft diagonals too (very subtle)
+        if (f > 8) {
+          ctx.save();
+          ctx.translate(s.x, s.y);
+          ctx.rotate(Math.PI / 4);
+          ctx.fillStyle = grad;
+          ctx.globalAlpha = 0.45;
+          ctx.fillRect(-spikeLen * 0.7, -0.5, spikeLen * 1.4, 1);
+          ctx.fillRect(-0.5, -spikeLen * 0.7, 1, spikeLen * 1.4);
+          ctx.globalAlpha = 1;
+          ctx.restore();
+        }
+      }
+
+      // halo
+      const hAlpha = Math.min(0.4, f * 0.05) * tw;
+      const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+      halo.addColorStop(0, `rgba(${r|0},${g|0},${b|0},${hAlpha})`);
+      halo.addColorStop(0.3, `rgba(${r|0},${g|0},${b|0},${hAlpha * 0.4})`);
+      halo.addColorStop(1, `rgba(${r|0},${g|0},${b|0},0)`);
+      ctx.fillStyle = halo;
+      ctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+
+      // core — blown-out white center for very bright stars
+      if (f > 2) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, f * 0.15) * tw})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, coreR * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        const a = Math.min(1, f * 0.6) * tw;
+        ctx.fillStyle = `rgba(${r|0},${g|0},${b|0},${a})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // film grain texture (regenerated periodically)
+    let grainCanvas = document.createElement('canvas');
+    function makeGrain() {
+      const gw = 200, gh = 200;
+      grainCanvas.width = gw; grainCanvas.height = gh;
+      const gctx = grainCanvas.getContext('2d');
+      const img = gctx.createImageData(gw, gh);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const v = Math.random() * 35;
+        img.data[i] = img.data[i+1] = img.data[i+2] = v;
+        img.data[i+3] = 255;
+      }
+      gctx.putImageData(img, 0, 0);
+    }
+    makeGrain();
+    setInterval(makeGrain, 90);
+
+    const t0 = performance.now();
+    function draw() {
+      const t = (performance.now() - t0) / 1000;
+
+      // background: dark with very faint blue gradient
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, '#020308');
+      bg.addColorStop(1, '#03040d');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      // very faint background nebula glow (random hot pixels)
+      // sort by flux ascending so brightest draw on top
+      stars.sort((a, b) => a.flux - b.flux);
+      for (const s of stars) drawSpikedStar(s, t);
+
+      // film grain overlay
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 0.06;
+      const pat = ctx.createPattern(grainCanvas, 'repeat');
+      ctx.fillStyle = pat;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    window.addEventListener('resize', () => { resize(); build(); });
+  </script>
+</body>
+</html>

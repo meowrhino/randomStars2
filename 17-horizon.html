@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>17 · Horizonte atmosférico</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin:0; padding:0; width:100vw; height:100vh; overflow:hidden; background:#000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .back {
+      position: fixed; top: 16px; left: 16px;
+      color: rgba(255,255,255,0.7);
+      font-family: ui-monospace, monospace; font-size: 12px;
+      text-decoration: none; z-index: 10;
+      padding: 6px 10px; border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+      background: rgba(0,0,0,0.4);
+    }
+    .back:hover { color:#fff; }
+    .label {
+      position: fixed; bottom: 16px; left: 16px;
+      color: rgba(255,255,255,0.55);
+      font-family: ui-monospace, monospace; font-size: 11px;
+      pointer-events: none;
+    }
+    .ui {
+      position: fixed; top: 16px; right: 16px;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px; border-radius: 4px;
+      display: flex; flex-direction: column; gap: 6px;
+      z-index: 10;
+    }
+    .ui label { display: flex; justify-content: space-between; gap: 12px; align-items:center; }
+    .ui input[type=range] { width: 120px; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← back</a>
+  <div class="label">17 · extinción Rayleigh · reddening hacia el horizonte · airglow · silueta de montañas</div>
+  <div class="ui">
+    <label>polución <input type="range" id="poll" min="0" max="100" value="20"></label>
+    <label>airglow <input type="range" id="ag" min="0" max="100" value="40"></label>
+  </div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H, HORIZON;
+
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+      HORIZON = H * 0.78;
+    }
+    resize();
+
+    // ── stars ──────────────────────────────────────────────────
+    let stars = [];
+    function build() {
+      stars = [];
+      const n = Math.floor(W * H / 700);
+      for (let i = 0; i < n; i++) {
+        const u = Math.random();
+        const mag = 6.5 - Math.pow(u, 4) * 6.5;
+        const flux = Math.pow(10, -0.4 * (mag - 5));
+        const x = Math.random() * W;
+        // distribute mostly above horizon
+        const y = Math.random() * HORIZON;
+        stars.push({
+          x, y, mag, flux,
+          color: pickColor(),
+          phase: Math.random() * Math.PI * 2,
+          twSpeed: 0.4 + Math.random() * 1.4
+        });
+      }
+    }
+    function pickColor() {
+      const r = Math.random();
+      if (r < 0.04) return [180, 200, 255];
+      if (r < 0.18) return [240, 245, 255];
+      if (r < 0.50) return [255, 250, 230];
+      if (r < 0.85) return [255, 230, 195];
+      return [255, 200, 165];
+    }
+    build();
+
+    // ── mountain silhouette ────────────────────────────────────
+    let mountains = [];
+    function buildMountains() {
+      mountains = [];
+      // 3 layers, back to front
+      for (let layer = 0; layer < 3; layer++) {
+        const pts = [];
+        const baseY = HORIZON + (1 - layer) * 8;
+        const amp = 30 + layer * 35;
+        const step = 18 + layer * 6;
+        let prev = baseY - amp * 0.5;
+        for (let x = -20; x <= W + 20; x += step) {
+          const target = baseY - amp * (0.3 + 0.7 * Math.random());
+          prev = prev * 0.5 + target * 0.5; // smooth
+          pts.push([x, prev]);
+        }
+        // add jaggedness
+        const detailed = [];
+        for (let i = 0; i < pts.length - 1; i++) {
+          detailed.push(pts[i]);
+          const midX = (pts[i][0] + pts[i+1][0]) / 2;
+          const midY = (pts[i][1] + pts[i+1][1]) / 2 + (Math.random() - 0.5) * 18;
+          detailed.push([midX, midY]);
+        }
+        detailed.push(pts[pts.length - 1]);
+        mountains.push({ pts: detailed, layer });
+      }
+    }
+    buildMountains();
+
+    // ── atmospheric extinction helpers ─────────────────────────
+    // airmass approximation: 1 / cos(zenith)
+    function airmass(y) {
+      // zenith at top (y=0), horizon at HORIZON
+      const cos_z = Math.max(0.04, 1 - y / HORIZON);
+      return 1 / cos_z;
+    }
+    function extinct(color, y) {
+      const X = Math.min(8, airmass(y));
+      // Rayleigh extinction stronger on blue. Mag/airmass ~0.14 blue, 0.05 red
+      // flux factor = 10^(-0.4 * k * X)
+      const fr = Math.pow(10, -0.4 * 0.05 * X);
+      const fg = Math.pow(10, -0.4 * 0.09 * X);
+      const fb = Math.pow(10, -0.4 * 0.18 * X);
+      return [color[0] * fr, color[1] * fg, color[2] * fb, fr, fg, fb];
+    }
+
+    const t0 = performance.now();
+    function draw() {
+      const t = (performance.now() - t0) / 1000;
+      const pollution = parseFloat(document.getElementById('poll').value) / 100;
+      const airglowLvl = parseFloat(document.getElementById('ag').value) / 100;
+
+      // ── sky gradient: zenith dark, horizon warmer (airglow + pollution) ──
+      const sky = ctx.createLinearGradient(0, 0, 0, HORIZON);
+      sky.addColorStop(0, '#020412'); // zenith
+      sky.addColorStop(0.5, `rgb(${8 + pollution * 12 | 0}, ${10 + pollution * 15 | 0}, ${28 + pollution * 25 | 0})`);
+      // mid-low: subtle green/yellow airglow
+      sky.addColorStop(0.8, `rgb(${20 + pollution * 40 | 0}, ${25 + airglowLvl * 25 | 0}, ${30 + pollution * 30 | 0})`);
+      // horizon: orange-red from pollution + airglow
+      const horR = 25 + pollution * 90;
+      const horG = 20 + pollution * 50 + airglowLvl * 20;
+      const horB = 30 + pollution * 30;
+      sky.addColorStop(1, `rgb(${horR | 0}, ${horG | 0}, ${horB | 0})`);
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, W, HORIZON + 4);
+
+      // ── light pollution dome (radial from horizon center) ──
+      if (pollution > 0) {
+        const domeR = W * 0.9;
+        const cx = W * 0.5;
+        const cy = HORIZON;
+        const dome = ctx.createRadialGradient(cx, cy, 0, cx, cy, domeR);
+        dome.addColorStop(0, `rgba(255, 170, 90, ${pollution * 0.18})`);
+        dome.addColorStop(0.3, `rgba(255, 140, 70, ${pollution * 0.10})`);
+        dome.addColorStop(1, `rgba(255, 140, 70, 0)`);
+        ctx.fillStyle = dome;
+        ctx.fillRect(0, 0, W, HORIZON + 4);
+      }
+
+      // ── airglow band (greenish-yellow at ~5-10° above horizon) ──
+      if (airglowLvl > 0) {
+        const agY = HORIZON - H * 0.08;
+        const agH = H * 0.05;
+        const ag = ctx.createLinearGradient(0, agY - agH, 0, agY + agH);
+        ag.addColorStop(0, 'rgba(120, 180, 130, 0)');
+        ag.addColorStop(0.5, `rgba(140, 200, 130, ${airglowLvl * 0.12})`);
+        ag.addColorStop(1, 'rgba(140, 200, 130, 0)');
+        ctx.fillStyle = ag;
+        ctx.fillRect(0, agY - agH, W, agH * 2);
+      }
+
+      // ── stars with atmospheric extinction ──
+      // pollution dims everything, reduces visible mag limit
+      const limitMag = 6.5 - pollution * 4.5;
+
+      ctx.globalCompositeOperation = 'lighter';
+      // sort dim→bright so bright draw on top
+      stars.sort((a, b) => a.flux - b.flux);
+      for (const s of stars) {
+        if (s.mag > limitMag) continue;
+        const tw = 0.8 + 0.2 * Math.sin(t * s.twSpeed + s.phase);
+        const [er, eg, eb] = extinct(s.color, s.y);
+        const am = airmass(s.y);
+        // additional fade factor for low altitude
+        const altFade = Math.max(0.05, 1 - (s.y / HORIZON) * 0.6);
+        const f = s.flux * tw * altFade;
+
+        const coreR = 0.3 + Math.pow(f, 0.4) * 0.7;
+        const haloR = coreR * 2 + Math.pow(f, 0.5) * 5;
+
+        // spikes for bright stars (only well above horizon)
+        if (f > 4 && s.y < HORIZON * 0.7) {
+          const spikeLen = Math.min(60, 5 + f * 4);
+          const spikeA = Math.min(0.6, f * 0.03);
+          const grad = ctx.createLinearGradient(s.x - spikeLen, s.y, s.x + spikeLen, s.y);
+          grad.addColorStop(0, `rgba(${er|0},${eg|0},${eb|0},0)`);
+          grad.addColorStop(0.5, `rgba(${er|0},${eg|0},${eb|0},${spikeA * tw})`);
+          grad.addColorStop(1, `rgba(${er|0},${eg|0},${eb|0},0)`);
+          ctx.fillStyle = grad;
+          ctx.fillRect(s.x - spikeLen, s.y - 0.5, spikeLen * 2, 1);
+
+          const grad2 = ctx.createLinearGradient(s.x, s.y - spikeLen, s.x, s.y + spikeLen);
+          grad2.addColorStop(0, `rgba(${er|0},${eg|0},${eb|0},0)`);
+          grad2.addColorStop(0.5, `rgba(${er|0},${eg|0},${eb|0},${spikeA * tw})`);
+          grad2.addColorStop(1, `rgba(${er|0},${eg|0},${eb|0},0)`);
+          ctx.fillStyle = grad2;
+          ctx.fillRect(s.x - 0.5, s.y - spikeLen, 1, spikeLen * 2);
+        }
+
+        const hAlpha = Math.min(0.4, f * 0.05);
+        const halo = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, haloR);
+        halo.addColorStop(0, `rgba(${er|0},${eg|0},${eb|0},${hAlpha})`);
+        halo.addColorStop(1, `rgba(${er|0},${eg|0},${eb|0},0)`);
+        ctx.fillStyle = halo;
+        ctx.fillRect(s.x - haloR, s.y - haloR, haloR * 2, haloR * 2);
+
+        ctx.fillStyle = f > 2
+          ? `rgba(255, 255, 255, ${Math.min(1, f * 0.15)})`
+          : `rgba(${er|0},${eg|0},${eb|0},${Math.min(1, f * 0.7)})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ── mountain silhouettes (back to front, getting darker) ──
+      for (const m of mountains) {
+        const shade = 4 + m.layer * 3;
+        ctx.fillStyle = `rgb(${shade}, ${shade}, ${shade + 4})`;
+        ctx.beginPath();
+        ctx.moveTo(m.pts[0][0], H);
+        for (const [px, py] of m.pts) ctx.lineTo(px, py);
+        ctx.lineTo(m.pts[m.pts.length - 1][0], H);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // foreground ground gradient
+      const ground = ctx.createLinearGradient(0, HORIZON, 0, H);
+      ground.addColorStop(0, 'rgba(0,0,0,0.4)');
+      ground.addColorStop(1, '#000');
+      ctx.fillStyle = ground;
+      ctx.fillRect(0, HORIZON, W, H - HORIZON);
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    window.addEventListener('resize', () => { resize(); build(); buildMountains(); });
+  </script>
+</body>
+</html>
